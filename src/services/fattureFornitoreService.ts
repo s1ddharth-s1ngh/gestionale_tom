@@ -8,12 +8,7 @@ import type {
   PagamentoInput,
   StatoFatturaFornitoreEffettivo,
 } from '@/types/fatturaFornitore';
-import {
-  STATI_FATTURA_FORNITORE,
-  costiDaFattura,
-  problemiGenerazione,
-} from '@/types/fatturaFornitore';
-import { rigaDaCosto } from './costiMapper';
+import { STATI_FATTURA_FORNITORE, problemiGenerazione } from '@/types/fatturaFornitore';
 import {
   fatturaFornitoreDaRiga,
   pagamentiPerDb,
@@ -259,8 +254,9 @@ export const fattureFornitoreService = {
     if (!f) throw new Error(`Fattura ${id} non trovata`);
     if (f.costiGenerati > 0) {
       throw new Error(
-        `Questa fattura ha già generato ${f.costiGenerati} righe di costo, che restano ` +
-          'in archivio. Sganciale prima di riportarla in bozza.',
+        `Questa fattura ha già generato ${f.costiGenerati} righe di costo, che continuano ` +
+          'a pesare sui riepiloghi. Annullale prima di riportarla in bozza, o l’archivio ' +
+          'direbbe che la spesa non è registrata mentre lo è.',
       );
     }
     return scrivi(id, { stato: 'bozza' }, 'Ritorno in bozza');
@@ -307,21 +303,25 @@ export const fattureFornitoreService = {
   // ── Il ponte verso i costi ─────────────────────────────────────────────────
 
   /**
-   * Trasforma le righe della fattura in righe di `costi`.
+   * Trasforma le righe della fattura in righe di `costi`, e la registra.
    *
-   * È il momento in cui un documento diventa spesa registrata, e ha due
-   * protezioni sovrapposte perché sbagliarlo costa caro e non si vede:
+   * Il lavoro lo fa `genera_costi_da_fattura` (db/012), non questo metodo, e la
+   * ragione è che **deve essere atomico**. Inserire N costi con N chiamate dal
+   * browser significa che una connessione che cade a metà lascia tre costi su
+   * cinque e la fattura mezza registrata, senza che nessuno se ne accorga
+   * finché il riepilogo del mese non torna. Dentro una funzione plpgsql o
+   * entrano tutte le righe o non ne entra nessuna — e ci entra anche il
+   * passaggio di stato, che fuori sarebbe una seconda chiamata capace di
+   * fallire da sola.
    *
-   *  - `problemiGenerazione` controlla prima, e dice in italiano cosa manca —
-   *    riga per riga, invece di lasciare che il database rifiuti nominando un
-   *    vincolo;
-   *  - l'`upsert` con `ignoreDuplicates` si appoggia all'indice unico su
-   *    `(fattura_fornitore_id, riga_fattura_id)`: se qualcuno clicca due volte,
-   *    o due schede generano insieme, il secondo tentativo non scrive niente
-   *    invece di raddoppiare la spesa del periodo.
+   * La funzione prende un `for update` sulla fattura, quindi regge anche il
+   * doppio click vero: due richieste partite insieme non passano entrambe il
+   * controllo di idempotenza. Se i costi ci sono già torna 0 senza toccare
+   * niente, invece di sollevare un errore — chi ha ricliccato non ha sbagliato.
    *
-   * La seconda protezione è quella che conta davvero: la prima ha una finestra
-   * fra il controllo e la scrittura, questa no.
+   * Il controllo qui davanti resta comunque, e non è ridondante: dice in
+   * italiano e riga per riga cosa manca, prima di un giro di rete e prima che
+   * sia il database a rifiutare nominando un vincolo.
    */
   async generaCosti(id: string): Promise<{ creati: number }> {
     const f = await this.getById(id);
@@ -330,35 +330,26 @@ export const fattureFornitoreService = {
     const problemi = problemiGenerazione(f);
     if (problemi.length > 0) throw new Error(problemi.join('\n'));
 
-    const righe = costiDaFattura(f).map((c) => rigaDaCosto(c));
-
-    const { data, error } = await supabase
-      .from('costi')
-      .upsert(righe, {
-        onConflict: 'fattura_fornitore_id,riga_fattura_id',
-        ignoreDuplicates: true,
-      })
-      .select('id');
+    const { data, error } = await supabase.rpc('genera_costi_da_fattura', {
+      p_fattura_id: id,
+    });
     esplodi('Generazione dei costi', error);
 
-    return { creati: (data ?? []).length };
+    return { creati: Number(data ?? 0) };
   },
 
   /**
-   * Sgancia i costi generati, senza cancellarli.
+   * Annulla i costi generati, per rifare una registrazione sbagliata.
    *
-   * I soldi sono usciti comunque: eliminarli falserebbe il periodo. Si toglie
-   * solo il legame col documento, e da lì la fattura può tornare in bozza o
-   * rigenerare. È il gesto esplicito che l'indice unico obbliga a fare invece
-   * di lasciare che un duplicato passi inosservato.
+   * Soft-delete e non cancellazione vera, coerentemente con tutto lo schema. È
+   * il gesto che sblocca la rigenerazione: l'indice unico di db/008 esclude i
+   * soft-deleted proprio perché annullare e rifare resti possibile.
    */
-  async sganciaCosti(id: string): Promise<{ sganciati: number }> {
-    const { data, error } = await supabase
-      .from('costi')
-      .update({ fattura_fornitore_id: null, riga_fattura_id: null })
-      .eq('fattura_fornitore_id', id)
-      .select('id');
-    esplodi('Sgancio dei costi', error);
-    return { sganciati: (data ?? []).length };
+  async annullaCosti(id: string): Promise<{ annullati: number }> {
+    const { data, error } = await supabase.rpc('annulla_costi_da_fattura', {
+      p_fattura_id: id,
+    });
+    esplodi('Annullamento dei costi', error);
+    return { annullati: Number(data ?? 0) };
   },
 };

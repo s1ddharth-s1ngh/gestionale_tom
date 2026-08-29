@@ -24,18 +24,24 @@ alter table public.costi
 comment on column public.costi.riga_fattura_id is
   'Id della riga JSONB di fatture_fornitore.righe che ha generato questo costo.';
 
--- Niente predicato sull'indice, ed è voluto.
+-- Il predicato `deleted_at is null` NON è decorativo, ed è la parte che si
+-- sbaglia più facilmente.
+--
+-- `annulla_costi_da_fattura` (012) corregge una registrazione sbagliata con un
+-- soft-delete: i costi restano in tabella con `deleted_at` valorizzato. Senza
+-- predicato continuerebbero a occupare il loro posto nell'indice, e la
+-- rigenerazione — che il suo controllo di idempotenza lascia passare, perché
+-- guarda solo le righe vive — sbatterebbe contro una violazione di unicità.
+-- Annullare e rifare, cioè l'unica ragione per cui `annulla` esiste, sarebbe
+-- rotto.
 --
 -- In Postgres due NULL non collidono mai, quindi i costi inseriti a mano — che
--- hanno entrambe le colonne NULL — non si disturbano fra loro e non serve
--- escluderli. Un indice parziale, oltre a non servire, renderebbe impossibile
--- l'inferenza di ON CONFLICT da PostgREST, che non permette di dichiararne il
--- predicato: la generazione idempotente smetterebbe di funzionare proprio dove
--- serve.
+-- hanno entrambe le colonne NULL — non si disturbano fra loro comunque.
 --
--- I soft-deleted restano dentro l'indice di proposito: se si cancella un costo
--- generato e si rigenera, il duplicato è quasi sempre un errore. Per rigenerare
--- davvero si azzera prima il legame (`update costi set fattura_fornitore_id =
--- null, riga_fattura_id = null where ...`), che è un gesto esplicito.
+-- Nota: un indice parziale non è inferibile da `ON CONFLICT` via PostgREST, che
+-- non permette di dichiararne il predicato. Non è un problema, perché la
+-- generazione passa dalla funzione `genera_costi_da_fattura` (012) con un
+-- INSERT normale, non da un upsert del client.
 create unique index if not exists uq_costi_riga_fattura
-  on public.costi (fattura_fornitore_id, riga_fattura_id);
+  on public.costi (fattura_fornitore_id, riga_fattura_id)
+  where deleted_at is null;

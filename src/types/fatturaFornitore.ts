@@ -405,16 +405,19 @@ export function costiDaFattura(f: FatturaFornitore): CostoInput[] {
 export function problemiGenerazione(f: FatturaFornitore): string[] {
   const problemi: string[] = [];
 
-  if (f.stato !== 'registrata') {
-    problemi.push('La fattura è ancora in bozza: registrala prima di generare i costi.');
-  }
   if (f.righe.length === 0) {
     problemi.push('La fattura non ha righe: non c’è niente da generare.');
   }
-  if (f.costiGenerati > 0) {
+
+  // `genera_costi_da_fattura` porta la fattura a `registrata` dentro la stessa
+  // transazione, e `chk_registrata` pretende una scadenza. Senza, il CHECK
+  // scatta all'ULTIMA istruzione e fa rollback di tutti i costi appena
+  // inseriti: si vedrebbe fallire la generazione per un motivo che sembra non
+  // c'entrare niente con le righe. Meglio dirlo prima di partire.
+  if (!f.dataScadenza) {
     problemi.push(
-      `I costi di questa fattura sono già stati generati (${f.costiGenerati}). ` +
-        'Rigenerarli li conterebbe due volte in ogni riepilogo.',
+      'Manca la data di scadenza. Serve perché registrando la fattura entra nello ' +
+        'scadenzario, ed è da lì che si decide cosa pagare.',
     );
   }
 
@@ -429,4 +432,17 @@ export function problemiGenerazione(f: FatturaFornitore): string[] {
   });
 
   return problemi;
+}
+
+/**
+ * I costi di questa fattura ci sono già.
+ *
+ * Non è un «problema» insieme agli altri, ed è una distinzione che conta:
+ * `genera_costi_da_fattura` in questo caso torna 0 senza toccare niente invece
+ * di fallire — chi ha ricliccato non ha sbagliato, e trattarlo come un guasto
+ * insegna a ignorare i messaggi. Serve però a spegnere il bottone prima, così
+ * il gesto inutile non si fa proprio.
+ */
+export function costiGiaGenerati(f: FatturaFornitore): boolean {
+  return f.costiGenerati > 0;
 }

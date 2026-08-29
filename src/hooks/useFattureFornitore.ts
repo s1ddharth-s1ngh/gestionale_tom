@@ -150,10 +150,10 @@ export function useGeneraCosti() {
   });
 }
 
-export function useSganciaCosti() {
+export function useAnnullaCosti() {
   const invalida = useInvalida();
   return useMutation({
-    mutationFn: (id: string) => fattureFornitoreService.sganciaCosti(id),
+    mutationFn: (id: string) => fattureFornitoreService.annullaCosti(id),
     onSuccess: () => invalida(true),
   });
 }
