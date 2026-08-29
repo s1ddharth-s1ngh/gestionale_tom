@@ -194,8 +194,17 @@ un'altra chat e lo committeresti a suo nome.
 **Non usare `git add`.** Committa direttamente i percorsi:
 
 ```bash
+# File GIÀ tracciati da git — basta committarli:
+git commit -F <file-messaggio> -- src/types/miofile.ts src/mocks/miofile.ts
+
+# File NUOVI — `git commit -- <percorsi>` non li vede, vanno aggiunti prima:
+git add src/types/miofile.ts src/mocks/miofile.ts
 git commit -F <file-messaggio> -- src/types/miofile.ts src/mocks/miofile.ts
 ```
+
+Il `-- <percorsi>` sul commit resta anche dopo l'`add`, e non è ridondante: è
+quello che impedisce di portarsi via i file che un'altra chat ha appena messo
+in stage.
 
 `git commit -- <percorsi>` committa il contenuto di QUEI file e ignora l'indice.
 È l'unica forma sicura qui: l'indice git (`.git/index`) è **uno solo** per tutte e
