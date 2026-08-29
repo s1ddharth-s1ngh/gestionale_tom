@@ -49,7 +49,9 @@ export default function CostiList() {
   const elenco = useCosti({ ...filtriBase, pagina, perPagina: PER_PAGINA });
   const conteggi = useConteggiCosti();
 
-  const righe = elenco.data?.righe ?? [];
+  // `?? []` crea un array nuovo a ogni render: senza useMemo, ogni useMemo che
+  // dipende da `righe` si ricalcola sempre e la memoizzazione non serve a niente.
+  const righe = useMemo(() => elenco.data?.righe ?? [], [elenco.data]);
   const totaleFiltrato = elenco.data?.totale ?? 0;
   const filtriAttivi = categoria !== 'tutte' || ricercaDebounced.trim().length > 0 || periodo !== 'sempre';
 

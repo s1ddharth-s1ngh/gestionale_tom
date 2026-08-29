@@ -61,7 +61,9 @@ export default function FattureFornitoreList() {
   // sono in ciascuno stato *dentro* quello che si sta cercando.
   const conteggi = useConteggiFattureFornitore(filtriRicerca);
 
-  const righe = elenco.data?.righe ?? [];
+  // `?? []` crea un array nuovo a ogni render, e i useMemo che ne dipendono si
+  // ricalcolerebbero comunque a ogni giro.
+  const righe = useMemo(() => elenco.data?.righe ?? [], [elenco.data]);
   const totale = elenco.data?.totale ?? 0;
   const filtriAttivi = stato !== 'tutte' || ricercaDebounced.trim().length > 0;
 

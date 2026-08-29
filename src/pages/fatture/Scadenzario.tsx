@@ -33,7 +33,9 @@ const GIORNI_URGENZA = 7;
 export default function Scadenzario() {
   const navigate = useNavigate();
   const query = useScadenzario();
-  const righe = query.data ?? [];
+  // `?? []` crea un array nuovo a ogni render: il totale sotto lo ricalcolerebbe
+  // sempre, che è esattamente quello che il useMemo doveva evitare.
+  const righe = useMemo(() => query.data ?? [], [query.data]);
 
   const totali = useMemo(() => {
     let scaduto = 0;
