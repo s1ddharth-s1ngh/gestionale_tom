@@ -1,4 +1,5 @@
 import { commesseMock } from '@/mocks/commesse';
+import { clientiService } from '@/services/clientiService';
 import { fattureService } from '@/services/fattureService';
 import type { TipoFattura } from '@/types/fattura';
 import type { FiltriBase, Foto, Paginato } from '@/types/comune';
@@ -13,6 +14,8 @@ import type {
   StatoCommessa,
 } from '@/types/commessa';
 import { avanzamentoDa, oreRealiDa } from '@/types/commessa';
+import type { Preventivo } from '@/types/preventivo';
+import { oreStimate } from '@/types/preventivo';
 
 /**
  * L'unico punto che tocca i dati delle commesse.
@@ -76,40 +79,29 @@ function perDataPianificata(a: Commessa, b: Commessa): number {
 }
 
 /**
- * PROVVISORIO — TODO(chat A): sparisce quando esiste `clientiService`, e le due
- * righe di `conCliente` diventano una sua lettura.
+ * Il join con l'anagrafica clienti.
  *
- * Sta qui e non nei mock delle commesse perché è anagrafica di qualcun altro:
- * il giorno che l'originale esiste si cancella questa mappa e non si tocca
- * nient'altro. L'alternativa — mostrare `cli-03` in tabella finché la chat A non
- * arriva — renderebbe elenco e calendario impossibili da giudicare a schermo,
- * che è l'unico modo che abbiamo di sapere se funzionano.
+ * Una lettura sola dell'elenco completo e poi una mappa, invece di un
+ * `getById` per riga: venti righe sarebbero venti chiamate, e con un backend
+ * vero diventerebbero venti round-trip per una tabella. Qui è la stessa forma
+ * che avrà una JOIN.
+ *
+ * Il fallback sull'id non è pigrizia: una commessa il cui cliente è stato
+ * cancellato deve restare leggibile e dire quale riferimento ha perso, non
+ * sparire dall'elenco.
  */
-const ANAGRAFICA_PROVVISORIA: Record<string, { cliente: string; luoghi: Record<string, string> }> = {
-  'cli-01': { cliente: 'Condominio Via Battisti 14', luoghi: { 'lgo-01-1': 'Cortile interno' } },
-  'cli-02': {
-    cliente: 'Comune di Casalecchio di Reno',
-    luoghi: { 'lgo-02-1': 'Viale Carducci', 'lgo-02-2': 'Parco della Chiusa' },
-  },
-  'cli-03': { cliente: 'Az. Agricola Ferrari Luca', luoghi: { 'lgo-03-1': 'Podere Le Fontane' } },
-  'cli-04': { cliente: 'Villa Monteveglio', luoghi: { 'lgo-04-1': 'Parco della villa' } },
-  'cli-05': { cliente: 'Condominio Le Querce', luoghi: { 'lgo-05-1': 'Area verde condominiale' } },
-  'cli-06': { cliente: 'Hotel San Luca', luoghi: { 'lgo-06-1': 'Giardino e siepe perimetrale' } },
-  'cli-07': { cliente: "Parrocchia di Sant'Agata", luoghi: { 'lgo-07-1': 'Viale dei cipressi' } },
-  'cli-08': { cliente: 'Gandolfi Marco', luoghi: { 'lgo-08-1': 'Giardino privato' } },
-  'cli-09': {
-    cliente: 'Logistica Emiliana Trasporti e Magazzinaggio S.r.l.',
-    luoghi: { 'lgo-09-1': 'Piazzale e area di manovra' },
-  },
-};
+async function risolutoreCliente(): Promise<(c: Commessa) => CommessaConCliente> {
+  const clienti = await clientiService.listaCompleta();
+  const perId = new Map(clienti.map((cl) => [cl.id, cl]));
 
-/** Aggiunge alla commessa i due campi che elenco e calendario devono mostrare. */
-function conCliente(c: Commessa): CommessaConCliente {
-  const voce = ANAGRAFICA_PROVVISORIA[c.clienteId];
-  return {
-    ...c,
-    clienteDenominazione: voce?.cliente ?? c.clienteId,
-    luogoEtichetta: voce?.luoghi[c.luogoInterventoId] ?? c.luogoInterventoId,
+  return (c) => {
+    const cliente = perId.get(c.clienteId);
+    const luogo = cliente?.luoghiIntervento.find((l) => l.id === c.luogoInterventoId);
+    return {
+      ...c,
+      clienteDenominazione: cliente?.denominazione ?? c.clienteId,
+      luogoEtichetta: luogo?.etichetta ?? c.luogoInterventoId,
+    };
   };
 }
 
@@ -131,7 +123,8 @@ export const commesseService = {
     await ritardo();
 
     // Il join col cliente sta PRIMA del filtro, o la ricerca per nome non
-    // troverebbe niente: `q` deve poter cercare su un campo che ancora non c'è.
+    // troverebbe niente: `q` cerca su un campo che prima del join non esiste.
+    const conCliente = await risolutoreCliente();
     let righe = commesse.map(conCliente);
 
     if (filtri?.stato) righe = righe.filter((c) => c.stato === filtri.stato);
@@ -160,12 +153,15 @@ export const commesseService = {
   async getById(id: string): Promise<CommessaConCliente | null> {
     await ritardo(200);
     const c = commesse.find((x) => x.id === id);
-    return c ? conCliente(c) : null;
+    if (!c) return null;
+    const conCliente = await risolutoreCliente();
+    return conCliente(c);
   },
 
   /** Le commesse di un cliente, per lo storico interventi nella sua scheda. */
   async listPerCliente(clienteId: string): Promise<CommessaConCliente[]> {
     await ritardo(200);
+    const conCliente = await risolutoreCliente();
     return commesse
       .filter((c) => c.clienteId === clienteId)
       .sort(perDataPianificata)
@@ -327,9 +323,54 @@ export const commesseService = {
     return conta;
   },
 
-  // TODO(chat B): `creaDaPreventivo(preventivo)` — non ancora scrivibile, il tipo
-  // `Preventivo` non esiste. Arriva col modulo Preventivi, insieme al corpo di
-  // `convertiInCommessa` in preventiviService.
+  /**
+   * Crea la commessa che nasce da un preventivo accettato.
+   *
+   * Ogni riga del preventivo diventa una lavorazione, comprese quelle che non
+   * sono ore: «smaltimento a corpo» è lavoro che qualcuno deve spuntare come
+   * fatto, e tenerlo fuori perché non ha un monte ore lo farebbe sparire dal
+   * rapportino. Quelle righe entrano con zero ore previste — è vero, non è un
+   * segnaposto: il loro costo sta nel preventivo, non nel tempo.
+   *
+   * Le ore previste totali sono quelle stimate dal preventivo e non la somma
+   * delle lavorazioni: le due coincidono oggi, ma la prima è l'impegno preso
+   * col cliente, e deve restare ferma anche se in cantiere le lavorazioni
+   * vengono risistemate.
+   *
+   * Non tocca il preventivo. È `preventiviService.convertiInCommessa` a
+   * scrivere `commessaId` e portarlo ad accettato: due service che si scrivono
+   * a vicenda sono due posti da cui può partire una conversione a metà.
+   */
+  async creaDaPreventivo(preventivo: Preventivo): Promise<Commessa> {
+    await ritardo(400);
+    const nuova = ricalcola({
+      id: nuovoId('cm'),
+      numero: prossimoNumero(),
+      preventivoId: preventivo.id,
+      clienteId: preventivo.clienteId,
+      luogoInterventoId: preventivo.luogoInterventoId,
+      // Nasce da pianificare: la data la decide chi organizza le squadre, non
+      // la conversione. Metterci quella del preventivo riempirebbe il
+      // calendario di giorni che nessuno ha scelto.
+      stato: 'da_pianificare',
+      orePreviste: oreStimate(preventivo.righe),
+      oreReali: 0,
+      lavorazioni: preventivo.righe.map((r) => ({
+        id: nuovoId('lv'),
+        descrizione: r.descrizione,
+        orePreviste: r.unita === 'ore' ? r.quantita : 0,
+        completata: false,
+      })),
+      fotoPrima: [],
+      fotoDopo: [],
+      avanzamentoPct: 0,
+      // Le note del preventivo servono in cantiere quanto in trattativa:
+      // «accesso mezzi difficile» è scritto lì e va letto qui.
+      note: preventivo.note,
+    });
+    commesse = [nuova, ...commesse];
+    return nuova;
+  },
 
   /**
    * Emette una fattura per la commessa e ne conserva il riferimento.
