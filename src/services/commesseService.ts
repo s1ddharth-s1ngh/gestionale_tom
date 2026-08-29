@@ -1,4 +1,6 @@
 import { commesseMock } from '@/mocks/commesse';
+import { fattureService } from '@/services/fattureService';
+import type { TipoFattura } from '@/types/fattura';
 import type { FiltriBase, Foto, Paginato } from '@/types/comune';
 import { impagina, ritardo } from '@/types/comune';
 import type {
@@ -329,8 +331,37 @@ export const commesseService = {
   // `Preventivo` non esiste. Arriva col modulo Preventivi, insieme al corpo di
   // `convertiInCommessa` in preventiviService.
 
-  // TODO(chat D): `generaFattura(id)` — la aggancia il modulo Fatture, che decide
-  // acconto o saldo. Qui resterà solo la scrittura di `fatturaId`.
+  /**
+   * Emette una fattura per la commessa e ne conserva il riferimento.
+   *
+   * L'imponibile è un parametro e non un campo della commessa: la commessa
+   * conosce le ore, non il prezzo concordato — quello sta sul preventivo o lo
+   * decide chi fattura. Il calcolo di acconto e saldo lo fa `fattureService`,
+   * qui resta la sola scrittura di `fatturaId`.
+   */
+  async generaFattura(
+    id: string,
+    opts: { tipo: TipoFattura; imponibile: number; percentuale?: number; note?: string },
+  ): Promise<{ fatturaId: string; numero: string }> {
+    const c = trova(id);
+
+    const fattura = await fattureService.emettiDaCommessa({
+      commessaId: c.id,
+      clienteId: c.clienteId,
+      numeroCommessa: c.numero,
+      imponibile: opts.imponibile,
+      tipo: opts.tipo,
+      percentuale: opts.percentuale,
+      note: opts.note,
+    });
+
+    // Solo il saldo e la fattura unica chiudono la commessa: dopo un acconto
+    // resta da fatturare, e sovrascrivere il riferimento perderebbe il legame
+    // con l'acconto appena emesso.
+    if (opts.tipo !== 'acconto') scrivi(id, { fatturaId: fattura.id });
+
+    return { fatturaId: fattura.id, numero: fattura.numero };
+  },
 };
 
 /** Oggi in ISO `AAAA-MM-GG`, coerente con come sono scritte tutte le date. */
