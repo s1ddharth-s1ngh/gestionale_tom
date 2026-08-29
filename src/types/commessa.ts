@@ -5,7 +5,7 @@ import type { StatusPillAccent } from '@/components/ui/status-pill';
  * Il lavoro sul campo: dalla pianificazione al rapportino firmato.
  *
  * Due campi qui NON si scrivono a mano — `oreReali` e `avanzamentoPct` derivano
- * dalle lavorazioni (vedi `oreRealiDa` e `avanzamentoDa`). Un numero scrivibile
+ * dalle lavorazioni (vedi `calcolaOreReali` e `calcolaAvanzamento`). Un numero scrivibile
  * a mano diverge dai dati che dovrebbe riassumere il primo giorno.
  */
 
@@ -101,6 +101,7 @@ export interface Commessa {
   note?: string;
   /** Valorizzato dalla chat D quando la commessa viene fatturata. */
   fatturaId?: string;
+/** ISO 8601. Servono all'ordinamento "ultime modificate" e allo storico del cliente. */  creataIl: string;  aggiornataIl: string;
 }
 
 export interface CommessaFiltri {
@@ -127,13 +128,13 @@ export interface CommessaInput {
 
 /** Somma delle ore consuntivate. Le lavorazioni non ancora chiuse valgono zero:
  *  finché non sono spuntate, quelle ore non sono state fatte. */
-export function oreRealiDa(lavorazioni: Lavorazione[]): number {
+export function calcolaOreReali(lavorazioni: Lavorazione[]): number {
   return lavorazioni.reduce((tot, l) => tot + (l.oreReali ?? 0), 0);
 }
 
 /** Percentuale sul numero di lavorazioni, non sulle ore: una commessa con una
  *  lavorazione lunga e nove corte non deve stare al 90% dopo mezz'ora di lavoro. */
-export function avanzamentoDa(lavorazioni: Lavorazione[]): number {
+export function calcolaAvanzamento(lavorazioni: Lavorazione[]): number {
   if (lavorazioni.length === 0) return 0;
   const fatte = lavorazioni.filter((l) => l.completata).length;
   return Math.round((fatte / lavorazioni.length) * 100);
