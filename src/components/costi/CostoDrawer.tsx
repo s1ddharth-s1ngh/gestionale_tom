@@ -11,6 +11,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAggiornaCosto, useCreaCosto, useMezzi } from '@/hooks/useCosti';
 import { useTuttiFornitori } from '@/hooks/useFornitori';
+import type { Fornitore } from '@/types/costo';
 import { useCommesse } from '@/hooks/useCommesse';
 import {
   CATEGORIE_COSTO,
@@ -42,7 +43,6 @@ const VUOTO: CostoForm = {
   categoria: 'materiali',
   descrizione: '',
   importo: 0,
-  aliquotaIva: 22,
 };
 
 interface CostoDrawerProps {
@@ -172,28 +172,23 @@ export function CostoDrawer({ open, onOpenChange, costo }: CostoDrawerProps) {
               />
             </FormField>
 
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="Importo (imponibile)" obbligatorio error={errors.importo?.message}>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min={0}
-                  {...register('importo')}
-                  className={`${INPUT_CLS} text-right tabular-nums`}
-                />
-              </FormField>
-
-              <FormField label="IVA %" hint="L'IVA si detrae: non entra nei riepiloghi.">
-                <Input
-                  type="number"
-                  step="1"
-                  min={0}
-                  max={100}
-                  {...register('aliquotaIva')}
-                  className={`${INPUT_CLS} text-right tabular-nums`}
-                />
-              </FormField>
-            </div>
+            {/* Nessun campo IVA: sugli acquisti si detrae, quindi non è un
+                costo e in `public.costi` non c'è la colonna. Un campo che si
+                compila e non si salva è peggio di un campo che non c'è. */}
+            <FormField
+              label="Importo (imponibile)"
+              obbligatorio
+              error={errors.importo?.message}
+              hint="IVA esclusa."
+            >
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                {...register('importo')}
+                className={`${INPUT_CLS} w-40 text-right tabular-nums`}
+              />
+            </FormField>
           </div>
         </SectionBox>
 
@@ -213,7 +208,7 @@ export function CostoDrawer({ open, onOpenChange, costo }: CostoDrawerProps) {
                     </SelectTrigger>
                     <SelectContent className="bg-[#15181B]">
                       <SelectItem value={NESSUNO}>Nessun fornitore</SelectItem>
-                      {(fornitori.data ?? []).map((f) => (
+                      {(fornitori.data ?? []).map((f: Fornitore) => (
                         <SelectItem key={f.id} value={f.id}>
                           {f.denominazione}
                         </SelectItem>

@@ -15,7 +15,6 @@ export const costoSchema = z
     categoria: z.enum(CATEGORIE_COSTO as [string, ...string[]]),
     descrizione: z.string().trim().min(3, 'Descrivi il costo in almeno tre caratteri'),
     importo: z.coerce.number().positive("L'importo deve essere maggiore di zero"),
-    aliquotaIva: z.coerce.number().min(0).max(100).optional(),
     fornitoreId: z.string().optional(),
     mezzoId: z.string().optional(),
     tipoNoleggio: z.enum(TIPI_NOLEGGIO as [string, ...string[]]).optional(),

@@ -155,9 +155,12 @@ export interface Costo {
   data: string;
   categoria: CategoriaCosto;
   descrizione: string;
-  /** Imponibile. L'IVA sui costi è detraibile e non è un costo: sta a parte. */
+  /**
+   * Imponibile, e basta. L'IVA sugli acquisti si detrae: non è un costo, e
+   * infatti in `public.costi` non c'è una colonna per lei. Sommarla gonfierebbe
+   * ogni riepilogo del 22% senza che nessuno abbia speso quei soldi.
+   */
   importo: number;
-  aliquotaIva?: number;
   fornitoreId?: string;
   /**
    * Obbligatorio quando la categoria è `carburante`: è tutto il senso del
@@ -182,7 +185,6 @@ export interface CostoInput {
   categoria: CategoriaCosto;
   descrizione: string;
   importo: number;
-  aliquotaIva?: number;
   fornitoreId?: string;
   mezzoId?: string;
   tipoNoleggio?: TipoNoleggio;

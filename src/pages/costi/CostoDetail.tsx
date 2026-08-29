@@ -99,8 +99,8 @@ export default function CostoDetail() {
                     {formatCurrency(costo.importo)}
                   </p>
                   <p className="mt-2 text-[11px] text-white/40">
-                    Imponibile. Con IVA {costo.aliquotaIva ?? 0}%:{' '}
-                    <span className="tabular-nums text-white/70">{formatCurrency(costo.totaleConIva)}</span>
+                    Imponibile. L'IVA sugli acquisti si detrae e non è un costo: non si
+                    registra e non entra nei riepiloghi.
                   </p>
                 </div>
 
