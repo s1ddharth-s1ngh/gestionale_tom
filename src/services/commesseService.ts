@@ -1,9 +1,5 @@
-import { commesseMock } from '@/mocks/commesse';
-import { clientiService } from '@/services/clientiService';
-import { fattureService } from '@/services/fattureService';
-import type { TipoFattura } from '@/types/fattura';
-import type { FiltriBase, Foto, Paginato } from '@/types/comune';
-import { impagina, ritardo } from '@/types/comune';
+import { supabase } from '@/lib/supabase';
+import { PER_PAGINA_DEFAULT, type Foto, type Paginato } from '@/types/comune';
 import type {
   Commessa,
   CommessaConCliente,
@@ -13,230 +9,330 @@ import type {
   Rapportino,
   StatoCommessa,
 } from '@/types/commessa';
-import { avanzamentoDa, oreRealiDa } from '@/types/commessa';
 import type { Preventivo } from '@/types/preventivo';
 import { oreStimate } from '@/types/preventivo';
+import {
+  commessaConClienteDaRiga,
+  commessaDaRiga,
+  rigaDaCommessa,
+  type RigaCommessa,
+} from './commesseMapper';
 
 /**
- * L'unico punto che tocca i dati delle commesse.
+ * Accesso ai dati delle commesse — su Supabase.
  *
- * Oggi legge un array in memoria, domani una `fetch`: le firme sono già quelle
- * che avranno con un backend vero — filtri e paginazione sono parametri, non
- * lavoro che si fa nel componente. Per questo `list()` torna un `Paginato` e
- * non un array: il giorno del backend la pagina non cambia di una riga.
+ * Le firme sono quelle di prima: è cambiato solo il corpo, e nessuna pagina,
+ * nessun hook e nessun componente è stato toccato. Era lo scopo di tenere il
+ * layer separato (CONVENTIONS §4), e questa migrazione è la prova che ha retto.
  *
- * Le modifiche vivono nella sessione e si perdono al reload. È voluto: si vede
- * l'effetto delle proprie azioni navigando, e si riparte puliti ricaricando.
+ * Tre cose che questo service NON fa più, perché ora le fa il database:
+ *
+ *  - **non calcola `ore_reali` e `avanzamento_pct`**: li ricalcola il trigger
+ *    `commesse_ricalcola_derivati` a ogni scrittura delle lavorazioni. Prima
+ *    era una funzione da cui passavano tutte le scritture; adesso è un vincolo,
+ *    e la differenza è che nemmeno una query fatta a mano può aggirarlo;
+ *  - **non filtra in memoria**: `.eq()`, `.gte()`, `.or()`, `.range()`;
+ *  - **non conta a parte**: il totale arriva dalla stessa query (`count:
+ *    'exact'`), perché due query separate possono vedere due stati del
+ *    database e produrre una paginazione che non torna.
  */
 
-/** Copia mutabile: il mock resta il punto di partenza a ogni ricarica di pagina. */
-let commesse: Commessa[] = commesseMock.map((c) => ({ ...c }));
+/** Cliente e luogo in una query sola: la lista li mostra su ogni riga. */
+const SELECT_COMMESSA = '*, clienti(denominazione), luoghi_intervento(etichetta)';
 
-/**
- * Riporta i derivati in accordo con le lavorazioni.
- *
- * Passa di qui OGNI scrittura, senza eccezioni: è l'unico motivo per cui
- * `oreReali` e `avanzamentoPct` si possono leggere senza ricalcolarli, e basta
- * una scrittura che salta il ricalcolo perché tornino a mentire.
- */
-function ricalcola(c: Commessa): Commessa {
-  return {
-    ...c,
-    oreReali: oreRealiDa(c.lavorazioni),
-    avanzamentoPct: avanzamentoDa(c.lavorazioni),
-  };
+/** PostgREST cappa le letture a 1000 righe. */
+const MAX_SELECT = 1000;
+
+function esplodi(contesto: string, error: { message: string } | null): void {
+  if (error) throw new Error(`${contesto}: ${error.message}`);
 }
 
-/** Progressivo annuale: `CM-2026-0007`. Il massimo dell'anno più uno, non il
- *  conteggio delle righe — cancellarne una non deve riassegnare un numero già usato. */
-function prossimoNumero(): string {
-  const anno = new Date().getFullYear();
-  const prefisso = `CM-${anno}-`;
-  const ultimo = commesse
-    .filter((c) => c.numero.startsWith(prefisso))
-    .map((c) => Number(c.numero.slice(prefisso.length)))
-    .filter((n) => Number.isFinite(n))
-    .reduce((max, n) => Math.max(max, n), 0);
-  return `${prefisso}${String(ultimo + 1).padStart(4, '0')}`;
-}
-
-/** Id locali: con un backend li genera il database, e questa funzione sparisce. */
-let contatoreId = commesse.length;
-function nuovoId(prefisso: string): string {
-  contatoreId += 1;
-  return `${prefisso}-${String(contatoreId).padStart(3, '0')}-${Math.random().toString(36).slice(2, 6)}`;
+/** Il termine di ricerca, ripulito: virgole e parentesi spezzano `or()`. */
+function pulisci(termine: string): string {
+  return termine.replace(/[,()]/g, ' ').trim();
 }
 
 /**
- * Ordinamento di default: le pianificate più vicine in cima, poi quelle senza
- * data. Chi apre l'elenco vuole sapere cosa succede adesso, non cosa è successo.
+ * Gli id dei clienti il cui nome contiene il termine.
+ *
+ * Serve perché la ricerca deve trovare «Casalecchio» digitato da chi cerca il
+ * Comune, non il numero della commessa. PostgREST non sa mettere in `or()` una
+ * colonna della tabella padre e una della tabella collegata insieme, quindi si
+ * risolve prima l'anagrafica e poi si filtra su `cliente_id`. Restano due query
+ * entrambe fatte dal database: il filtro non torna in memoria.
  */
-function perDataPianificata(a: Commessa, b: Commessa): number {
-  if (!a.dataPianificata && !b.dataPianificata) return b.numero.localeCompare(a.numero);
-  if (!a.dataPianificata) return 1; // le non pianificate in fondo, non in cima
-  if (!b.dataPianificata) return -1;
-  return b.dataPianificata.localeCompare(a.dataPianificata);
+async function clientiCheMatchano(termine: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('clienti')
+    .select('id')
+    .is('deleted_at', null)
+    .ilike('denominazione', `%${termine}%`)
+    .range(0, MAX_SELECT - 1);
+  esplodi('Ricerca clienti', error);
+  return (data ?? []).map((r) => (r as { id: string }).id);
 }
 
 /**
- * Il join con l'anagrafica clienti.
+ * Applica i filtri che non sono lo stato. Condiviso da `list` e
+ * `contaPerStato`, o i contatori delle pill direbbero numeri che non c'entrano
+ * con la tabella che stanno sopra.
  *
- * Una lettura sola dell'elenco completo e poi una mappa, invece di un
- * `getById` per riga: venti righe sarebbero venti chiamate, e con un backend
- * vero diventerebbero venti round-trip per una tabella. Qui è la stessa forma
- * che avrà una JOIN.
- *
- * Il fallback sull'id non è pigrizia: una commessa il cui cliente è stato
- * cancellato deve restare leggibile e dire quale riferimento ha perso, non
- * sparire dall'elenco.
+ * **Sincrona, e non è un dettaglio di stile:** un query builder di PostgREST è
+ * un thenable, quindi `await` su di lui non aspetta — LO ESEGUE, e restituisce
+ * il risultato al posto del builder da continuare a comporre. Gli id dei
+ * clienti che matchano vanno quindi risolti prima, fuori di qui.
  */
-async function risolutoreCliente(): Promise<(c: Commessa) => CommessaConCliente> {
-  const clienti = await clientiService.listaCompleta();
-  const perId = new Map(clienti.map((cl) => [cl.id, cl]));
-
-  return (c) => {
-    const cliente = perId.get(c.clienteId);
-    const luogo = cliente?.luoghiIntervento.find((l) => l.id === c.luogoInterventoId);
-    return {
-      ...c,
-      clienteDenominazione: cliente?.denominazione ?? c.clienteId,
-      luogoEtichetta: luogo?.etichetta ?? c.luogoInterventoId,
-    };
-  };
-}
-
-/**
- * I filtri che NON dipendono dallo stato. Li applicano sia `list` sia
- * `contaPerStato`, perché i contatori delle pill devono contare dentro la
- * ricerca corrente: un contatore che ignora il filtro attivo mostra numeri che
- * non c'entrano con quello che si vede sotto.
- */
-function applicaFiltriNonStato(
-  righe: CommessaConCliente[],
+function conFiltriNonStato<T>(
+  q: T,
   filtri?: Omit<CommessaFiltri, 'stato' | 'pagina' | 'perPagina'>,
-): CommessaConCliente[] {
-  let out = righe;
+  idClienti: string[] = [],
+): T {
+  // Il tipo del builder cambia a ogni concatenazione: tipizzarlo per esteso
+  // costerebbe più di quanto renda.
+  let out = q as any;
 
-  if (filtri?.clienteId) out = out.filter((c) => c.clienteId === filtri.clienteId);
+  if (filtri?.clienteId) out = out.eq('cliente_id', filtri.clienteId);
 
   // Finestra sulla data pianificata: la usa il calendario per chiedere il mese.
   // Le commesse senza data non appartengono a nessun mese e restano fuori.
-  if (filtri?.dal) out = out.filter((c) => !!c.dataPianificata && c.dataPianificata >= filtri.dal!);
-  if (filtri?.al) out = out.filter((c) => !!c.dataPianificata && c.dataPianificata <= filtri.al!);
+  if (filtri?.dal) out = out.gte('data_pianificata', filtri.dal);
+  if (filtri?.al) out = out.lte('data_pianificata', filtri.al);
 
-  if (filtri?.q) {
-    const q = filtri.q.trim().toLowerCase();
-    out = out.filter(
-      (c) =>
-        c.numero.toLowerCase().includes(q) ||
-        c.clienteDenominazione.toLowerCase().includes(q) ||
-        c.luogoEtichetta.toLowerCase().includes(q) ||
-        (c.note?.toLowerCase().includes(q) ?? false) ||
-        c.lavorazioni.some((l) => l.descrizione.toLowerCase().includes(q)),
-    );
+  const termine = filtri?.q ? pulisci(filtri.q) : '';
+  if (termine) {
+    const condizioni = [`numero.ilike.%${termine}%`, `note.ilike.%${termine}%`];
+    // `in.()` con la lista vuota è sintassi non valida: si aggiunge solo se
+    // qualche cliente ha davvero matchato.
+    if (idClienti.length > 0) condizioni.push(`cliente_id.in.(${idClienti.join(',')})`);
+    out = out.or(condizioni.join(','));
   }
 
-  return out;
+  return out as T;
 }
 
-function trova(id: string): Commessa {
-  const c = commesse.find((x) => x.id === id);
+/**
+ * Progressivo annuale `CM-2026-0007`: il massimo dell'anno più uno.
+ *
+ * Non è il conteggio delle righe — cancellarne una riassegnerebbe un numero già
+ * usato, e due documenti con lo stesso numero sono un problema contabile, non
+ * un fastidio. Il vincolo `uq_commesse_numero` è la rete sotto: due creazioni
+ * nello stesso istante fanno fallire la seconda invece di duplicare il numero.
+ */
+async function prossimoNumero(): Promise<string> {
+  const anno = new Date().getFullYear();
+  const prefisso = `CM-${anno}-`;
+  const { data, error } = await supabase
+    .from('commesse')
+    .select('numero')
+    .like('numero', `${prefisso}%`)
+    .order('numero', { ascending: false })
+    .limit(1);
+  esplodi('Numerazione commesse', error);
+
+  const ultimo = data?.[0] ? Number((data[0] as { numero: string }).numero.slice(prefisso.length)) : 0;
+  const prossimo = Number.isFinite(ultimo) ? ultimo + 1 : 1;
+  return `${prefisso}${String(prossimo).padStart(4, '0')}`;
+}
+
+/** Oggi in ISO `AAAA-MM-GG`, che è come il DB tiene le `date`. */
+function oggi(): string {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+}
+
+async function leggi(id: string): Promise<Commessa> {
+  const c = await commesseService.getById(id);
   if (!c) throw new Error(`Commessa ${id} non trovata`);
   return c;
 }
 
-/** Sostituisce la commessa in elenco ricalcolando i derivati, e la restituisce. */
-function scrivi(id: string, patch: Partial<Commessa>): Commessa {
-  const aggiornata = ricalcola({ ...trova(id), ...patch });
-  commesse = commesse.map((c) => (c.id === id ? aggiornata : c));
-  return aggiornata;
+/** Scrive e restituisce la riga aggiornata: `select()` dopo `update()` evita
+ *  una seconda lettura, e quello che torna ha già i derivati del trigger. */
+async function scrivi(id: string, patch: Record<string, unknown>): Promise<Commessa> {
+  const { data, error } = await supabase
+    .from('commesse')
+    .update(patch)
+    .eq('id', id)
+    .is('deleted_at', null)
+    .select(SELECT_COMMESSA)
+    .single();
+  esplodi('Aggiornamento commessa', error);
+  return commessaDaRiga(data as unknown as RigaCommessa);
+}
+
+/** Accoda una riga alle note senza perdere quelle che c'erano. */
+function noteCon(attuali: string | undefined, aggiunta?: string): string | null {
+  const testo = [attuali, aggiunta].filter(Boolean).join('\n').trim();
+  return testo.length > 0 ? testo : null;
 }
 
 export const commesseService = {
   async list(filtri?: CommessaFiltri): Promise<Paginato<CommessaConCliente>> {
-    await ritardo();
+    const perPagina = filtri?.perPagina ?? PER_PAGINA_DEFAULT;
+    const pagina = Math.max(1, filtri?.pagina ?? 1);
+    const da = (pagina - 1) * perPagina;
 
-    // Il join col cliente sta PRIMA del filtro, o la ricerca per nome non
-    // troverebbe niente: `q` cerca su un campo che prima del join non esiste.
-    const conCliente = await risolutoreCliente();
-    let righe = applicaFiltriNonStato(commesse.map(conCliente), filtri);
+    const termine = filtri?.q ? pulisci(filtri.q) : '';
+    const idClienti = termine ? await clientiCheMatchano(termine) : [];
 
-    if (filtri?.stato) righe = righe.filter((c) => c.stato === filtri.stato);
+    let q = supabase
+      .from('commesse')
+      .select(SELECT_COMMESSA, { count: 'exact' })
+      .is('deleted_at', null);
 
-    return impagina([...righe].sort(perDataPianificata), filtri as FiltriBase);
+    q = conFiltriNonStato(q, filtri, idClienti);
+    if (filtri?.stato) q = q.eq('stato', filtri.stato);
+
+    // Le pianificate più vicine in cima, le senza data in fondo: chi apre
+    // l'elenco vuole sapere cosa succede adesso, non cosa è successo.
+    // `nullsFirst: false` è il pezzo che tiene le non pianificate in coda.
+    const { data, error, count } = await q
+      .order('data_pianificata', { ascending: false, nullsFirst: false })
+      .order('numero', { ascending: false })
+      .range(da, da + perPagina - 1);
+    esplodi('Lettura commesse', error);
+
+    return {
+      righe: ((data ?? []) as unknown as RigaCommessa[]).map(commessaConClienteDaRiga),
+      totale: count ?? 0,
+      pagina,
+      perPagina,
+    };
   },
 
   async getById(id: string): Promise<CommessaConCliente | null> {
-    await ritardo(200);
-    const c = commesse.find((x) => x.id === id);
-    if (!c) return null;
-    const conCliente = await risolutoreCliente();
-    return conCliente(c);
+    const { data, error } = await supabase
+      .from('commesse')
+      .select(SELECT_COMMESSA)
+      .eq('id', id)
+      .is('deleted_at', null)
+      // `maybeSingle` e non `single`: un id inesistente non è un guasto, è un
+      // 404 da mostrare.
+      .maybeSingle();
+    esplodi('Lettura commessa', error);
+    return data ? commessaConClienteDaRiga(data as unknown as RigaCommessa) : null;
   },
 
   /** Le commesse di un cliente, per lo storico interventi nella sua scheda. */
   async listPerCliente(clienteId: string): Promise<CommessaConCliente[]> {
-    await ritardo(200);
-    const conCliente = await risolutoreCliente();
-    return commesse
-      .filter((c) => c.clienteId === clienteId)
-      .sort(perDataPianificata)
-      .map(conCliente);
+    const { data, error } = await supabase
+      .from('commesse')
+      .select(SELECT_COMMESSA)
+      .eq('cliente_id', clienteId)
+      .is('deleted_at', null)
+      .order('data_pianificata', { ascending: false, nullsFirst: false })
+      .range(0, MAX_SELECT - 1);
+    esplodi('Lettura commesse del cliente', error);
+    return ((data ?? []) as unknown as RigaCommessa[]).map(commessaConClienteDaRiga);
+  },
+
+  /**
+   * Quante commesse per stato, dentro la ricerca corrente.
+   *
+   * Sei `count` con `head: true` invece di scaricare le righe per contarle: al
+   * database costa un indice, al client zero byte di payload. Contarle in
+   * pagina vorrebbe dire scaricare l'archivio intero per riempire sei pillole.
+   */
+  async contaPerStato(
+    filtri?: Omit<CommessaFiltri, 'stato' | 'pagina' | 'perPagina'>,
+  ): Promise<Record<StatoCommessa | 'tutte', number>> {
+    const stati: StatoCommessa[] = [
+      'da_pianificare',
+      'pianificata',
+      'in_corso',
+      'completata',
+      'sospesa',
+      'annullata',
+    ];
+
+    // Gli id dei clienti che matchano si risolvono UNA volta e valgono per
+    // tutti e sette i conteggi: risolverli dentro `conta` sarebbe la stessa
+    // query all'anagrafica ripetuta sette volte a ogni battuta sulla ricerca.
+    const termine = filtri?.q ? pulisci(filtri.q) : '';
+    const idClienti = termine ? await clientiCheMatchano(termine) : [];
+
+    const conta = async (stato?: StatoCommessa): Promise<number> => {
+      let q = supabase
+        .from('commesse')
+        .select('id', { count: 'exact', head: true })
+        .is('deleted_at', null);
+      q = conFiltriNonStato(q, filtri, idClienti);
+      if (stato) q = q.eq('stato', stato);
+      const { count, error } = await q;
+      esplodi('Conteggio commesse', error);
+      return count ?? 0;
+    };
+
+    const [tutte, ...perStato] = await Promise.all([conta(), ...stati.map((s) => conta(s))]);
+
+    return {
+      tutte,
+      da_pianificare: perStato[0],
+      pianificata: perStato[1],
+      in_corso: perStato[2],
+      completata: perStato[3],
+      sospesa: perStato[4],
+      annullata: perStato[5],
+    };
   },
 
   async create(input: CommessaInput): Promise<Commessa> {
-    await ritardo(400);
-    const nuova = ricalcola({
-      id: nuovoId('cm'),
-      numero: prossimoNumero(),
-      preventivoId: input.preventivoId,
-      clienteId: input.clienteId,
-      luogoInterventoId: input.luogoInterventoId,
-      // Lo stato non si sceglie: una commessa con una data è pianificata, senza è
-      // da pianificare. Lasciarlo scegliere significa elenchi che si contraddicono.
-      stato: input.dataPianificata ? 'pianificata' : 'da_pianificare',
-      dataPianificata: input.dataPianificata,
-      orePreviste: input.orePreviste,
-      oreReali: 0,
-      lavorazioni: input.lavorazioni.map((l) => ({ ...l, id: nuovoId('lv') })),
-      fotoPrima: [],
-      fotoDopo: [],
-      avanzamentoPct: 0,
-      note: input.note,
-    });
-    commesse = [nuova, ...commesse];
-    return nuova;
+    const { data, error } = await supabase
+      .from('commesse')
+      .insert({
+        ...rigaDaCommessa(input),
+        numero: await prossimoNumero(),
+        // Lo stato non si sceglie: una commessa con una data è pianificata,
+        // senza è da pianificare. Lasciarlo scegliere produce elenchi che si
+        // contraddicono — e il CHECK `chk_pianificata` rifiuterebbe comunque
+        // una pianificata senza data.
+        stato: input.dataPianificata ? 'pianificata' : 'da_pianificare',
+        // Le lavorazioni in ingresso non hanno id: glielo diamo qui, perché
+        // dentro un JSONB non c'è nessun default che possa farlo.
+        lavorazioni: (input.lavorazioni ?? []).map((l) => ({ ...l, id: crypto.randomUUID() })),
+      })
+      .select(SELECT_COMMESSA)
+      .single();
+    esplodi('Creazione commessa', error);
+    return commessaDaRiga(data as unknown as RigaCommessa);
   },
 
   async update(id: string, patch: Partial<CommessaInput>): Promise<Commessa> {
-    await ritardo(400);
-    const attuale = trova(id);
-    return scrivi(id, {
-      ...patch,
-      // Le lavorazioni in ingresso possono essere nuove (senza id) o esistenti:
-      // le prime ne ricevono uno, le seconde tengono il loro o perdono le ore già
-      // consuntivate.
-      lavorazioni: patch.lavorazioni
-        ? patch.lavorazioni.map((l) => ({ ...l, id: (l as Lavorazione).id ?? nuovoId('lv') }))
-        : attuale.lavorazioni,
-    });
+    const riga = rigaDaCommessa(patch);
+    if (patch.lavorazioni !== undefined) {
+      riga.lavorazioni = patch.lavorazioni.map((l) => ({
+        ...l,
+        id: (l as Lavorazione).id ?? crypto.randomUUID(),
+      }));
+    }
+    return scrivi(id, riga);
   },
 
+  /**
+   * Soft-delete: si scrive `deleted_at`, non si cancella la riga.
+   *
+   * Le FK verso le commesse sono `on delete restrict` apposta — una fattura che
+   * punta a una commessa sparita è un documento contabile senza il lavoro che
+   * lo giustifica.
+   */
   async remove(id: string): Promise<void> {
-    await ritardo(300);
-    commesse = commesse.filter((c) => c.id !== id);
+    const { error } = await supabase
+      .from('commesse')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id);
+    esplodi('Eliminazione commessa', error);
   },
 
   // ── Il ciclo di vita ───────────────────────────────────────────────────────
-  // Transizioni esplicite invece di un `update({stato})` libero: così l'insieme
-  // dei passaggi possibili si legge qui, e non va ricostruito leggendo le pagine.
+  // Transizioni esplicite invece di un `update({stato})` libero: l'insieme dei
+  // passaggi possibili si legge qui, e non va ricostruito leggendo le pagine.
 
-  /** Mette la commessa a calendario. È anche il modo per spostarla di giorno. */
+  /** Mette a calendario, o sposta di giorno una commessa già pianificata. */
   async pianifica(id: string, data: string): Promise<Commessa> {
-    await ritardo(300);
-    const attuale = trova(id);
+    const attuale = await leggi(id);
     return scrivi(id, {
-      dataPianificata: data,
+      data_pianificata: data,
       // Una commessa già avviata che si sposta di data resta in corso: la
       // ripianificazione non annulla il lavoro già fatto.
       stato: attuale.stato === 'da_pianificare' ? 'pianificata' : attuale.stato,
@@ -244,108 +340,76 @@ export const commesseService = {
   },
 
   async avvia(id: string): Promise<Commessa> {
-    await ritardo(300);
-    const attuale = trova(id);
+    const attuale = await leggi(id);
     return scrivi(id, {
       stato: 'in_corso',
-      dataInizio: attuale.dataInizio ?? oggi(),
+      data_inizio: attuale.dataInizio ?? oggi(),
       // Avviare una commessa mai pianificata la data ce l'ha comunque: è oggi.
-      dataPianificata: attuale.dataPianificata ?? oggi(),
+      data_pianificata: attuale.dataPianificata ?? oggi(),
     });
   },
 
   async sospendi(id: string, motivo?: string): Promise<Commessa> {
-    await ritardo(300);
-    const attuale = trova(id);
-    return scrivi(id, {
-      stato: 'sospesa',
-      note: motivo ? [attuale.note, motivo].filter(Boolean).join('\n') : attuale.note,
-    });
+    const attuale = await leggi(id);
+    return scrivi(id, { stato: 'sospesa', note: noteCon(attuale.note, motivo) });
   },
 
   /** Riprende una sospesa: torna in corso se era già iniziata, pianificata se no. */
   async riprendi(id: string): Promise<Commessa> {
-    await ritardo(300);
-    const attuale = trova(id);
+    const attuale = await leggi(id);
     return scrivi(id, { stato: attuale.dataInizio ? 'in_corso' : 'pianificata' });
   },
 
   async annulla(id: string, motivo?: string): Promise<Commessa> {
-    await ritardo(300);
-    const attuale = trova(id);
-    return scrivi(id, {
-      stato: 'annullata',
-      note: motivo ? [attuale.note, motivo].filter(Boolean).join('\n') : attuale.note,
-    });
+    const attuale = await leggi(id);
+    return scrivi(id, { stato: 'annullata', note: noteCon(attuale.note, motivo) });
   },
 
   async completa(id: string): Promise<Commessa> {
-    await ritardo(300);
-    const attuale = trova(id);
-    return scrivi(id, { stato: 'completata', dataFine: attuale.dataFine ?? oggi() });
+    const attuale = await leggi(id);
+    return scrivi(id, { stato: 'completata', data_fine: attuale.dataFine ?? oggi() });
   },
 
   // ── Il lavoro sul campo ────────────────────────────────────────────────────
 
   /**
-   * Sostituisce l'elenco delle lavorazioni: ore reali e avanzamento si aggiornano
-   * di conseguenza, perché passa da `scrivi`.
+   * Sostituisce l'elenco delle lavorazioni. Ore reali e avanzamento si
+   * aggiornano da soli: li ricalcola il trigger, non questa funzione.
    */
   async aggiornaLavorazioni(id: string, lavorazioni: Lavorazione[]): Promise<Commessa> {
-    await ritardo(250);
-    return scrivi(id, { lavorazioni });
-  },
-
-  async salvaFoto(id: string, quando: 'prima' | 'dopo', foto: Foto[]): Promise<Commessa> {
-    await ritardo(300);
-    return scrivi(id, quando === 'prima' ? { fotoPrima: foto } : { fotoDopo: foto });
-  },
-
-  /**
-   * Salva il rapportino. Se il cliente ha firmato la commessa si chiude: la firma
-   * È la conclusione del lavoro, e chiedere anche un click su «completa» significa
-   * ritrovarsi commesse firmate e ancora aperte.
-   */
-  async salvaRapportino(id: string, rapportino: Rapportino): Promise<Commessa> {
-    await ritardo(400);
-    const firmato = !!rapportino.firmaCliente;
-    const attuale = trova(id);
     return scrivi(id, {
-      rapportino,
-      stato: firmato ? 'completata' : attuale.stato,
-      dataFine: firmato ? (attuale.dataFine ?? rapportino.dataCompilazione) : attuale.dataFine,
-      // Firmare chiude tutte le lavorazioni: il rapportino dice che il lavoro è
-      // finito, e un avanzamento all'80% su una commessa firmata è una svista.
-      lavorazioni: firmato
-        ? attuale.lavorazioni.map((l) => ({ ...l, completata: true, oreReali: l.oreReali ?? l.orePreviste }))
-        : attuale.lavorazioni,
+      lavorazioni: lavorazioni.map((l) => ({ ...l, id: l.id ?? crypto.randomUUID() })),
     });
   },
 
-  /** Conteggi per le pill di filtro. Vengono dall'archivio intero, non dalla
-   *  pagina corrente: un contatore che cambia cambiando pagina non è un contatore. */
-  async contaPerStato(
-    filtri?: Omit<CommessaFiltri, 'stato' | 'pagina' | 'perPagina'>,
-  ): Promise<Record<StatoCommessa | 'tutte', number>> {
-    await ritardo(150);
-    // I contatori contano DENTRO la ricerca corrente. Contare l'archivio intero
-    // farebbe dire alla pill «In corso 4» sopra una tabella che, cercando
-    // "Casalecchio", di commesse in corso ne mostra una: due numeri veri che
-    // insieme raccontano una bugia.
-    const conCliente = await risolutoreCliente();
-    const righe = applicaFiltriNonStato(commesse.map(conCliente), filtri);
+  async salvaFoto(id: string, quando: 'prima' | 'dopo', foto: Foto[]): Promise<Commessa> {
+    return scrivi(id, quando === 'prima' ? { foto_prima: foto } : { foto_dopo: foto });
+  },
 
-    const conta = {
-      tutte: righe.length,
-      da_pianificare: 0,
-      pianificata: 0,
-      in_corso: 0,
-      completata: 0,
-      sospesa: 0,
-      annullata: 0,
-    };
-    for (const c of righe) conta[c.stato] += 1;
-    return conta;
+  /**
+   * Salva il rapportino. Se il cliente ha firmato, la commessa si chiude: la
+   * firma È la conclusione del lavoro, e chiedere anche un click su «completa»
+   * significa ritrovarsi commesse firmate e ancora aperte.
+   */
+  async salvaRapportino(id: string, rapportino: Rapportino): Promise<Commessa> {
+    const attuale = await leggi(id);
+    const firmato = !!rapportino.firmaCliente;
+
+    return scrivi(id, {
+      rapportino,
+      stato: firmato ? 'completata' : attuale.stato,
+      data_fine: firmato ? (attuale.dataFine ?? rapportino.dataCompilazione) : attuale.dataFine ?? null,
+      // Firmare chiude tutte le lavorazioni: il rapportino dice che il lavoro è
+      // finito, e un avanzamento all'80% su una commessa firmata è una svista.
+      // Passando dalle lavorazioni, il trigger porta l'avanzamento a 100 da sé.
+      lavorazioni: firmato
+        ? attuale.lavorazioni.map((l) => ({
+            ...l,
+            completata: true,
+            oreReali: l.oreReali ?? l.orePreviste,
+          }))
+        : attuale.lavorazioni,
+    });
   },
 
   /**
@@ -357,82 +421,40 @@ export const commesseService = {
    * rapportino. Quelle righe entrano con zero ore previste — è vero, non è un
    * segnaposto: il loro costo sta nel preventivo, non nel tempo.
    *
-   * Le ore previste totali sono quelle stimate dal preventivo e non la somma
-   * delle lavorazioni: le due coincidono oggi, ma la prima è l'impegno preso
-   * col cliente, e deve restare ferma anche se in cantiere le lavorazioni
-   * vengono risistemate.
-   *
    * Non tocca il preventivo. È `preventiviService.convertiInCommessa` a
    * scrivere `commessaId` e portarlo ad accettato: due service che si scrivono
-   * a vicenda sono due posti da cui può partire una conversione a metà.
+   * a vicenda sono due punti da cui può partire una conversione a metà.
    */
   async creaDaPreventivo(preventivo: Preventivo): Promise<Commessa> {
-    await ritardo(400);
-    const nuova = ricalcola({
-      id: nuovoId('cm'),
-      numero: prossimoNumero(),
-      preventivoId: preventivo.id,
+    return commesseService.create({
       clienteId: preventivo.clienteId,
       luogoInterventoId: preventivo.luogoInterventoId,
-      // Nasce da pianificare: la data la decide chi organizza le squadre, non
-      // la conversione. Metterci quella del preventivo riempirebbe il
-      // calendario di giorni che nessuno ha scelto.
-      stato: 'da_pianificare',
+      preventivoId: preventivo.id,
+      // Nasce da pianificare: la data la decide chi organizza le squadre.
+      // Ereditare quella del preventivo riempirebbe il calendario di giorni che
+      // nessuno ha scelto.
       orePreviste: oreStimate(preventivo.righe),
-      oreReali: 0,
       lavorazioni: preventivo.righe.map((r) => ({
-        id: nuovoId('lv'),
         descrizione: r.descrizione,
         orePreviste: r.unita === 'ore' ? r.quantita : 0,
         completata: false,
       })),
-      fotoPrima: [],
-      fotoDopo: [],
-      avanzamentoPct: 0,
       // Le note del preventivo servono in cantiere quanto in trattativa:
       // «accesso mezzi difficile» è scritto lì e va letto qui.
       note: preventivo.note,
     });
-    commesse = [nuova, ...commesse];
-    return nuova;
   },
 
   /**
-   * Emette una fattura per la commessa e ne conserva il riferimento.
+   * Collega alla commessa la fattura che la copre.
    *
-   * L'imponibile è un parametro e non un campo della commessa: la commessa
-   * conosce le ore, non il prezzo concordato — quello sta sul preventivo o lo
-   * decide chi fattura. Il calcolo di acconto e saldo lo fa `fattureService`,
-   * qui resta la sola scrittura di `fatturaId`.
+   * Emettere il documento NON si fa da qui: lo costruisce `fattureService`, che
+   * sa cosa distingue un acconto da un saldo. Questo service espone solo la
+   * scrittura di `fattura_id`, ed e' la divisione giusta - un service che
+   * chiama il service di un altro modulo per orchestrarlo diventa il punto in
+   * cui si rompono tutti e due quando uno dei due cambia firma.
    */
-  async generaFattura(
-    id: string,
-    opts: { tipo: TipoFattura; imponibile: number; percentuale?: number; note?: string },
-  ): Promise<{ fatturaId: string; numero: string }> {
-    const c = trova(id);
-
-    const fattura = await fattureService.emettiDaCommessa({
-      commessaId: c.id,
-      clienteId: c.clienteId,
-      numeroCommessa: c.numero,
-      imponibile: opts.imponibile,
-      tipo: opts.tipo,
-      percentuale: opts.percentuale,
-      note: opts.note,
-    });
-
-    // Solo il saldo e la fattura unica chiudono la commessa: dopo un acconto
-    // resta da fatturare, e sovrascrivere il riferimento perderebbe il legame
-    // con l'acconto appena emesso.
-    if (opts.tipo !== 'acconto') scrivi(id, { fatturaId: fattura.id });
-
-    return { fatturaId: fattura.id, numero: fattura.numero };
+  async collegaFattura(id: string, fatturaId: string): Promise<Commessa> {
+    return scrivi(id, { fattura_id: fatturaId });
   },
 };
-
-/** Oggi in ISO `AAAA-MM-GG`, coerente con come sono scritte tutte le date. */
-function oggi(): string {
-  const d = new Date();
-  d.setHours(12, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
-}
