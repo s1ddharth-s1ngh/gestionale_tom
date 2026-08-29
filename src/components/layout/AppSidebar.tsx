@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ChevronsLeft, ChevronsRight } from '@/components/ui/icons';
 import { NAV_ITEMS, isItemActive } from '@/lib/navigation';
+import { formatDataEstesa } from '@/lib/formatters';
 import { cn } from '@/lib/utils';
 
 /**
@@ -11,6 +12,10 @@ import { cn } from '@/lib/utils';
  * DUE impilate (le sue 7 divisioni + le voci dell'area attiva): Tom ha un'area
  * sola, quindi la prima card non serve. Geometria e classi delle pill restano
  * identiche.
+ *
+ * Da quando l'header è sparito (§5.2) questa card è l'intera cornice dell'app:
+ * marchio in testa, voci in mezzo, data e utente in fondo. Tre fasce separate da
+ * un filo, così si leggono come tre cose diverse e non come una lista sola.
  *
  * Collassabile a w-16 (solo il chip icona, con tooltip nativo): la navigazione
  * non sparisce mai, cambia solo larghezza. Lo stato sopravvive al reload.
@@ -55,6 +60,8 @@ export function AppSidebar() {
     localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0');
   }, [collapsed]);
 
+  const oggi = formatDataEstesa(new Date());
+
   return (
     // Sotto md la sidebar non c'è: le pagine scorrono a tutta larghezza.
     <div className="relative z-30 hidden h-full flex-shrink-0 py-3 pl-3 md:block">
@@ -65,16 +72,21 @@ export function AppSidebar() {
         )}
       >
         <div className={cn(CARD, 'flex min-h-0 flex-1 flex-col overflow-hidden')}>
+          {/* Fascia 1 — il marchio. Allineato a sinistra come le voci sotto:
+              in un gestionale la colonna di sinistra è una sola. */}
           <div
             className={cn(
-              'flex flex-shrink-0 items-center pb-1.5 pt-3.5',
+              'flex flex-shrink-0 items-center border-b border-white/[0.06] py-3.5',
               collapsed ? 'justify-center px-2' : 'gap-2 px-4',
             )}
           >
             {!collapsed && (
-              <span className="truncate text-xs font-semibold tracking-wide text-white/70">
-                MENU
-              </span>
+              <Link
+                to="/"
+                className="truncate text-[15px] leading-none tracking-tight text-white/50 transition-colors hover:text-white/70"
+              >
+                Gestionale <span className="font-semibold text-white">Tom</span>
+              </Link>
             )}
             <button
               type="button"
@@ -95,12 +107,18 @@ export function AppSidebar() {
             </button>
           </div>
 
+          {/* Fascia 2 — la navigazione. */}
           <nav
             className={cn(
-              'flex-1 space-y-1 overflow-y-auto pt-1.5',
-              collapsed ? 'px-2 pb-3' : 'p-3 pt-1.5',
+              'flex-1 space-y-1 overflow-y-auto',
+              collapsed ? 'px-2 py-3' : 'p-3',
             )}
           >
+            {!collapsed && (
+              <p className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+                Menu
+              </p>
+            )}
             {NAV_ITEMS.map((item) => {
               const active = isItemActive(location.pathname, item);
               const Icon = item.icon;
@@ -121,6 +139,26 @@ export function AppSidebar() {
               );
             })}
           </nav>
+
+          {/* Fascia 3 — utente e data. La data non è decorazione: chi compila un
+              rapportino o registra un incasso scrive una data, e averla
+              sott'occhio evita l'errore. Stava nell'header, ora sta qui. */}
+          <div
+            className={cn(
+              'flex flex-shrink-0 items-center border-t border-white/[0.06] py-3',
+              collapsed ? 'justify-center px-2' : 'gap-2.5 px-4',
+            )}
+          >
+            <span
+              title={collapsed ? oggi : undefined}
+              className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/[0.07] text-[11px] font-semibold text-white/70"
+            >
+              T
+            </span>
+            {!collapsed && (
+              <span className="truncate text-[11px] capitalize text-white/40">{oggi}</span>
+            )}
+          </div>
         </div>
       </aside>
     </div>

@@ -88,9 +88,10 @@ form-field.tsx                    [AGGIUNTA] label + input + errore, le classi d
 ### Shell (`src/components/layout/`)
 
 ```
-AppLayout.tsx                     header + sidebar + main, scroll reset — DESIGN_SYSTEM §5.1
-AppHeader.tsx                     h-14, logo, data, avatar — senza la roba NexSuite
-AppSidebar.tsx                    una card, pillClass di Telebi, collasso in localStorage
+AppLayout.tsx                     sidebar + main, scroll reset — DESIGN_SYSTEM §5.1
+                                  NIENTE header: eliminato, vedi DESIGN_SYSTEM §5.2
+AppSidebar.tsx                    una card in tre fasce (marchio / nav / utente+data),
+                                  pillClass di Telebi, collasso in localStorage
 PageLoader.tsx                    fallback del Suspense
 ```
 

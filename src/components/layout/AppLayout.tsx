@@ -1,15 +1,18 @@
 import { Suspense, useLayoutEffect, useRef } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { AppHeader } from './AppHeader';
 import { AppSidebar } from './AppSidebar';
 import { PageLoader } from './PageLoader';
 
 /**
  * AppLayout — il guscio dell'app. docs/DESIGN_SYSTEM.md §5.1.
  *
- * Header + sidebar + main. Lo scroll sta DENTRO <main>, non sul body: così la
- * sidebar e l'header restano fermi mentre la pagina scorre, senza `position:
- * fixed` e senza compensare l'altezza a mano.
+ * Sidebar + main, e basta: **non c'è header**. La barra in alto costava 56px di
+ * altezza su ogni schermata per mostrare un marchio e una data, e in un
+ * gestionale l'altezza è la risorsa scarsa — le tabelle vivono di righe visibili.
+ * Marchio e data sono scesi nella card della sidebar, che c'è già.
+ *
+ * Lo scroll sta DENTRO <main>, non sul body: così la sidebar resta ferma mentre
+ * la pagina scorre, senza `position: fixed` e senza compensare l'altezza a mano.
  *
  * Il padding del guscio è `px-3 py-3`. Le pagine mettono `p-3` sulla propria
  * radice e il contenuto sta a 24px dai bordi, uguale ovunque: è LA regola di
@@ -28,18 +31,15 @@ export function AppLayout() {
 
   return (
     <div className="h-screen w-full overflow-hidden bg-black">
-      <div className="relative flex h-full w-full flex-col">
-        <AppHeader />
-        <div className="flex flex-1 overflow-hidden">
-          <AppSidebar />
-          <main ref={mainRef} className="flex-1 overflow-y-auto">
-            <div className="w-full px-3 py-3 pb-4">
-              <Suspense fallback={<PageLoader />}>
-                <Outlet />
-              </Suspense>
-            </div>
-          </main>
-        </div>
+      <div className="relative flex h-full w-full">
+        <AppSidebar />
+        <main ref={mainRef} className="flex-1 overflow-y-auto">
+          <div className="w-full px-3 py-3 pb-4">
+            <Suspense fallback={<PageLoader />}>
+              <Outlet />
+            </Suspense>
+          </div>
+        </main>
       </div>
     </div>
   );

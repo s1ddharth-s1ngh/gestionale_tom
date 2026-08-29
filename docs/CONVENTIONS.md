@@ -299,6 +299,23 @@ const queryClient = new QueryClient({
   esattamente il pattern di `AnagraficaClienti` e `AppSidebar`.
 - **Niente store globale.** Telebi usa zustand in 4 file su 1530, per casi speciali.
 
+
+### 4.5 Supabase **[AGGIUNTA]**
+
+Il backend è configurato ma **non ancora usato**: oggi ogni service legge dai mock. Il client
+sta in `src/lib/supabase.ts` ed è soggetto alla stessa regola dei mock — **lo importano solo i
+service**. Un componente o un hook che importa `supabase` è un errore di layer, non una
+scorciatoia.
+
+```
+componente  →  hook (react-query)  →  service  →  mocks  |  lib/supabase
+```
+
+- credenziali in `.env` (gitignorato), modello in `.env.example`, tipizzate in `vite-env.d.ts`
+- si usa la **publishable key**, mai la secret: sta nel bundle, la protezione è la RLS
+- niente `@supabase/ssr`: questa è una SPA Vite senza server, il client browser basta
+- la migrazione di un'entità è un file solo — il corpo del suo service — come promesso da §4.1
+
 ---
 
 ## 5. Routing
@@ -370,7 +387,7 @@ function isItemActive(pathname: string, item: NavSection): boolean {
 | Se il componente… | va in | esempio |
 |---|---|---|
 | non sa niente del dominio, è pura forma | `components/ui/` | `DarkTable`, `StatusPill`, `PageHeader` |
-| è lo shell dell'app | `components/layout/` | `AppLayout`, `AppSidebar`, `AppHeader` |
+| è lo shell dell'app | `components/layout/` | `AppLayout`, `AppSidebar` — niente header, DESIGN_SYSTEM §5.2 |
 | conosce il dominio ed è usato da **più** moduli | `components/shared/` | `ClienteSelect`, `IndirizzoCard` |
 | conosce **un** modulo | `components/<modulo>/` | `PreventivoRigheTable` |
 | è una schermata con una rotta | `pages/<modulo>/` | `PreventiviList` |

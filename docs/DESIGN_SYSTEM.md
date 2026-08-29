@@ -270,21 +270,20 @@ sidebar, `shadow-[0_24px_60px_-30px_rgba(0,0,0,0.7)]`.
 
 ## 5. Lo shell
 
-### 5.1 Struttura **[TELEBI]**
+### 5.1 Struttura **[TELEBI]** — senza header **[AGGIUNTA]**
 
 ```tsx
-// Telebi — src/components/Layout/PlatformLayout.tsx (DesktopShell)
-<div className="h-screen w-full bg-black overflow-hidden">
-  <div className="w-full h-full flex flex-col relative">
-    <PlatformHeader />
-    <div className="flex flex-1 overflow-hidden">
-      <AppSidebar area={division} />
-      <main ref={mainRef} className="flex-1 overflow-y-auto">
-        <div className="w-full px-3 py-3 pb-4">
-          <Suspense fallback={<PageLoader />}>{children || <Outlet />}</Suspense>
-        </div>
-      </main>
-    </div>
+// src/components/layout/AppLayout.tsx
+<div className="h-screen w-full overflow-hidden bg-black">
+  <div className="relative flex h-full w-full">
+    <AppSidebar />
+    <main ref={mainRef} className="flex-1 overflow-y-auto">
+      <div className="w-full px-3 py-3 pb-4">
+        <Suspense fallback={<PageLoader />}>
+          <Outlet />
+        </Suspense>
+      </div>
+    </main>
   </div>
 </div>
 ```
@@ -292,22 +291,33 @@ sidebar, `shadow-[0_24px_60px_-30px_rgba(0,0,0,0.7)]`.
 Lo scroll è **dentro `<main>`**, non sul body, e si resetta a ogni cambio di `location.pathname`
 con un `useLayoutEffect`.
 
-### 5.2 Header **[TELEBI]** — semplificato **[AGGIUNTA]**
+Telebi ha un `<PlatformHeader />` sopra la riga sidebar+main. **Tom no**: la pagina parte da
+sotto il bordo dello schermo. Vedi §5.2 per il perché.
 
-```tsx
-// Telebi — src/components/Layout/PlatformHeader.tsx
-<header className="w-full h-14 bg-black border-b border-white/[0.06] flex items-center px-5 gap-5 shrink-0 z-50">
-```
+### 5.2 Header — **non esiste** **[NON REPLICARE]**
 
-Altezza 56px. Il bottone tondo dell'header è un pattern ripetuto:
+**Decisione: l'header è stato eliminato.** Il file `AppHeader.tsx` non c'è più e non va
+ricreato.
 
-```tsx
-className="relative w-8 h-8 rounded-full bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center transition-colors"
-```
+Telebi ha una barra alta 56px con selettore azienda multi-tenant, chat AI, notifiche e dropdown
+del team. Tom aveva tenuto solo logo + data + avatar. Ma tre elementi decorativi non pagano
+**56px di altezza sottratti a ogni singola schermata**: questo è un gestionale, le pagine sono
+tabelle, e in una tabella l'altezza si misura in righe visibili. 56px sono due righe in meno,
+sempre, ovunque.
 
-**[NON REPLICARE]** — il resto dell'header di Telebi è selettore azienda multi-tenant, chat AI,
-notifiche, dropdown team. Per un'app a due utenti tengo: logo a sinistra, data corrente, avatar
-utente con menu. Il resto è peso morto.
+I tre contenuti superstiti sono scesi nella card della sidebar, che c'era già e aveva spazio
+(§5.3): **marchio** in testa, **data + avatar** in fondo.
+
+Conseguenze operative, da tenere a mente scrivendo pagine:
+
+- il canvas utile è `100dvh` meno il solo padding del guscio (`py-3` = 24px) — **niente più
+  `calc(100dvh - 84px)`**, la formula di Telebi che scontava l'header
+- una pagina non ha un posto "sopra" dove mettere azioni globali: le azioni stanno nella
+  **testata di pagina** (§6.1), che è già il pattern giusto
+- il logo/marchio **non si ripete** nelle pagine: sta solo nella sidebar
+
+> Il bottone tondo `w-8 h-8 rounded-full bg-white/[0.06] hover:bg-white/[0.1]` che Telebi usava
+> nell'header resta valido come pattern per le icon-button altrove.
 
 ### 5.3 Sidebar **[TELEBI]**
 
@@ -344,11 +354,28 @@ Larghezze: `w-60` espansa, `w-16` collassata, contenitore `pl-3 py-3`, `hidden m
 **[AGGIUNTA]** Tom ha una sola "area": la card 1 delle divisioni non serve. Tengo **una sola
 card** con le voci di menu, stessa geometria e stesse `pillClass`. Il collasso resta.
 
+**[AGGIUNTA]** Senza header, la card è l'intera cornice dell'app ed è divisa in **tre fasce**
+separate da un filo `border-white/[0.06]`, così si leggono come tre cose diverse e non come una
+lista sola:
+
+| Fascia | Contenuto | Classi |
+|---|---|---|
+| 1 — marchio | `Gestionale` in `text-white/50` + `Tom` in `font-semibold text-white`, link a `/` | `border-b border-white/[0.06] py-3.5 px-4` |
+| 2 — nav | etichetta `MENU` + le pill di `NAV_ITEMS` | `flex-1 overflow-y-auto p-3` |
+| 3 — utente | avatar `T` + data estesa di oggi | `border-t border-white/[0.06] py-3 px-4` |
+
+Il marchio è **allineato a sinistra**, sulla stessa colonna delle voci sotto: in un gestionale
+la colonna di sinistra è una sola. Niente logo, niente icona: solo la parola.
+
+Da collassata (`w-16`) restano il bottone di collasso, le icone e l'avatar — la data passa nel
+`title` dell'avatar, l'etichetta `MENU` e il marchio spariscono.
+
 ### 5.4 Responsive **[TELEBI]**
 
 - `md` (768px) è la soglia: sotto, Telebi monta uno **shell mobile separato** (`MobileShell`:
   topbar + bottom nav + FAB), non una sidebar che si nasconde
-- Pagine full-height: `md:h-[calc(100dvh-84px)] flex flex-col` — 84px = header 56 + padding 12+16
+- Pagine full-height: Telebi usa `md:h-[calc(100dvh-84px)] flex flex-col` — 84px = header 56 +
+  padding 12+16. **In Tom l'header non c'è (§5.2): sono `calc(100dvh-28px)`**, solo il padding
 - Griglie: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 min-[1920px]:grid-cols-6`
 
 **[AGGIUNTA]** Per Tom, primo rilascio desktop-first: sotto `md` le pagine scorrono
