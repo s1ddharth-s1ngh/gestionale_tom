@@ -216,7 +216,19 @@ Quella modifica va in un **commit suo**, separato.
 Quattro chat scrivono nella stessa cartella. **Mai `git add -A` e mai `git add .`**:
 metteresti in stage il lavoro a metà di qualcun altro e lo committeresti a suo nome.
 
-Metti in stage **solo i tuoi file, per percorso esplicito**:
+**Non usare `git add`.** Committa direttamente i percorsi:
+
+```bash
+git commit -F <file-messaggio> -- src/types/tuofile.ts src/mocks/tuofile.ts
+```
+
+`git commit -- <percorsi>` committa il contenuto di QUEI file e ignora l'indice.
+È l'unica forma sicura qui: l'indice git (`.git/index`) è **uno solo** per tutte
+e quattro le sessioni, quindi fra il tuo `git add` e il tuo `git commit` un'altra
+chat può committare — e si porta via i tuoi file staged dentro il suo commit.
+È già successo. Con `git commit -- <percorsi>` non può succedere.
+
+Vecchia forma, **da non usare**:
 
 ```bash
 git add src/types/fattura.ts src/mocks/fatture.ts

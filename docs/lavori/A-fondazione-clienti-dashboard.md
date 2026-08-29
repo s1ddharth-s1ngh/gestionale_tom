@@ -191,12 +191,18 @@ Quattro chat scrivono nella **stessa cartella, sullo stesso branch**. La regola 
 disastri: **mai `git add -A`, mai `git add .`** — metteresti in stage il lavoro a metà di
 un'altra chat e lo committeresti a suo nome.
 
+**Non usare `git add`.** Committa direttamente i percorsi:
+
 ```bash
-git add <percorsi espliciti>
-git status --short
-git diff --cached --name-only     # controlla di non aver preso roba d'altri
-git commit -F <file-messaggio>
+git commit -F <file-messaggio> -- src/types/miofile.ts src/mocks/miofile.ts
 ```
+
+`git commit -- <percorsi>` committa il contenuto di QUEI file e ignora l'indice.
+È l'unica forma sicura qui: l'indice git (`.git/index`) è **uno solo** per tutte e
+quattro le sessioni, quindi fra il tuo `git add` e il tuo `git commit` un'altra chat
+può committare — e si porta via i tuoi file staged dentro il suo commit. È già
+successo: la fondazione Clienti è finita dentro `d3a110b`, un commit della chat D.
+Niente si perde, ma l'attribuzione salta.
 
 Un commit per task. Messaggio in italiano, minuscolo dopo il prefisso di area, che dice cosa
 cambia per chi usa l'app. Nel corpo il perché, coi numeri se ci sono.
