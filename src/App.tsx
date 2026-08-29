@@ -46,6 +46,13 @@ const CostiList = lazy(() => import('@/pages/costi/CostiList'));
 const CostoDetail = lazy(() => import('@/pages/costi/CostoDetail'));
 const FornitoriList = lazy(() => import('@/pages/costi/FornitoriList'));
 const FornitoreDetail = lazy(() => import('@/pages/costi/FornitoreDetail'));
+// Il ciclo passivo: le fatture che RICEVIAMO. Stanno sotto /costi e non sotto
+// /fatture perché è da qui che nascono i costi — una fattura fornitore
+// registrata genera le righe di spesa.
+const FattureFornitoreList = lazy(() => import('@/pages/costi/FattureFornitoreList'));
+const FatturaFornitoreNuova = lazy(() => import('@/pages/costi/FatturaFornitoreNuova'));
+const FatturaFornitoreDetail = lazy(() => import('@/pages/costi/FatturaFornitoreDetail'));
+const ScadenzarioFornitori = lazy(() => import('@/pages/costi/ScadenzarioFornitori'));
 
 const router = createBrowserRouter(
   createRoutesFromElements(
@@ -82,6 +89,15 @@ const router = createBrowserRouter(
         {/* `fornitori` prima di `:id`, stessa ragione. */}
         <Route path="fornitori" element={<FornitoriList />} />
         <Route path="fornitori/:id" element={<FornitoreDetail />} />
+        {/* Il ciclo passivo sta sotto /costi e non sotto /fatture: quelle sono
+            le fatture che emettiamo noi, queste quelle che riceviamo, e
+            confonderle in un solo elenco e' il modo di pagarne una due volte. */}
+        {/* `scadenzario` e `fatture/nuova` prima di `fatture/:id` e di `:id`,
+            o verrebbero letti come identificativi. */}
+        <Route path="scadenzario" element={<ScadenzarioFornitori />} />
+        <Route path="fatture" element={<FattureFornitoreList />} />
+        <Route path="fatture/nuova" element={<FatturaFornitoreNuova />} />
+        <Route path="fatture/:id" element={<FatturaFornitoreDetail />} />
         <Route path=":id" element={<CostoDetail />} />
       </Route>
 
