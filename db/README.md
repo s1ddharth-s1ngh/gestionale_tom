@@ -18,7 +18,10 @@ oppure via `psql`.
 
 010_seed_clienti.sql   dati di esempio: clienti e luoghi di intervento
 011_seed_preventivi.sql dati di esempio: 24 preventivi — richiede 010
+013_seed_fatture.sql   dati di esempio: 13 fatture attive — richiede 010
+014_seed_costi.sql     dati di esempio: 9 fornitori, 6 mezzi, 38 costi
 015_seed_commesse.sql  dati di esempio: 15 commesse — richiede 010
+016_seed_fatture_fornitore.sql  dati di esempio: 8 fatture ricevute — richiede 014
 ```
 
 **`006_rls.sql` va rilanciato dopo il `007`**: quel file aggiunge due tabelle con RLS attiva,
