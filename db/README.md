@@ -31,6 +31,16 @@ e finché non ricevono una policy rispondono zero righe a tutti — che a scherm
 L'ordine non è decorativo: `002` referenzia `001`, `003` aggiunge una foreign key a `002`,
 `004` ne aggiunge una a `003`. Eseguirli fuori ordine dà errori di chiave mancante.
 
+## La via breve: `TUTTO.sql`
+
+I file numerati sono la fonte; **`TUTTO.sql` è la loro concatenazione nell'ordine giusto**, da
+incollare in una volta sola nel SQL Editor. Diciassette esecuzioni in sequenza sono diciassette
+occasioni di saltarne una o invertirne due, e l'ordine non è decorativo: sbagliarlo dà un errore
+di chiave mancante a metà, con mezzo schema già creato.
+
+È **generato**: non si modifica a mano. Si modificano i file numerati e si rigenera, o le due
+versioni divergono e non si sa più quale sia quella vera.
+
 ## Come eseguirli
 
 **Dal SQL Editor** (https://supabase.com/dashboard → progetto → SQL Editor): apri i file in
