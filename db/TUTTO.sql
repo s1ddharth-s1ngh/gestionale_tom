@@ -81,6 +81,7 @@ comment on function public.set_updated_at() is
   'Trigger BEFORE UPDATE: tiene updated_at allineato senza che le query lo debbano scrivere.';
 
 
+
 -- ##########################################################################
 -- ##  001_clienti.sql
 -- ##########################################################################
@@ -202,6 +203,7 @@ create trigger trg_luoghi_updated before update on public.luoghi_intervento
   for each row execute function public.set_updated_at();
 
 
+
 -- ##########################################################################
 -- ##  002_preventivi.sql
 -- ##########################################################################
@@ -294,6 +296,7 @@ where p.deleted_at is null;
 
 comment on view public.v_preventivi is
   'Preventivi con lo stato "scaduto" derivato da valido_fino. Le liste leggono da qui.';
+
 
 
 -- ##########################################################################
@@ -411,6 +414,7 @@ join public.clienti cl on cl.id = c.cliente_id
 where c.deleted_at is null;
 
 
+
 -- ##########################################################################
 -- ##  004_fatture.sql
 -- ##########################################################################
@@ -522,6 +526,7 @@ where f.deleted_at is null;
 
 comment on view public.v_fatture is
   'Fatture con incassato, residuo e stato_effettivo calcolati dagli incassi. Le liste e lo scadenzario leggono da qui.';
+
 
 
 -- ##########################################################################
@@ -644,6 +649,7 @@ left join public.commesse co on co.id = c.commessa_id
 where c.deleted_at is null;
 
 
+
 -- ##########################################################################
 -- ##  006_rls.sql
 -- ##########################################################################
@@ -731,6 +737,7 @@ comment on schema public is
 --   end loop;
 -- end
 -- $$;
+
 
 
 -- ##########################################################################
@@ -968,6 +975,7 @@ create policy apertura_temporanea_fatture_fornitore
   using (true) with check (true);
 
 
+
 -- ##########################################################################
 -- ##  008_costi_riga_fattura.sql
 -- ##########################################################################
@@ -1016,9 +1024,17 @@ comment on column public.costi.riga_fattura_id is
 -- non permette di dichiararne il predicato. Non è un problema, perché la
 -- generazione passa dalla funzione `genera_costi_da_fattura` (012) con un
 -- INSERT normale, non da un upsert del client.
+-- `drop` prima del `create`, e non è ridondante con l'`if not exists`: la prima
+-- versione di questo file creava l'indice SENZA il predicato, e `if not exists`
+-- si limiterebbe a trovarne uno con quel nome e a lasciarlo com'è. Chi avesse
+-- già eseguito la versione vecchia si ritroverebbe con l'indice sbagliato e
+-- nessun errore — cioè col difetto che questo file esiste per chiudere.
+drop index if exists public.uq_costi_riga_fattura;
+
 create unique index if not exists uq_costi_riga_fattura
   on public.costi (fattura_fornitore_id, riga_fattura_id)
   where deleted_at is null;
+
 
 
 -- ##########################################################################
@@ -1071,6 +1087,7 @@ set search_path = public
 as $$
 declare
   v_prossimo integer;
+  v_massimo  integer;
   v_numero   text;
   v_esistente text;
 begin
@@ -1084,12 +1101,26 @@ begin
     return v_esistente;
   end if;
 
-  -- `on conflict do update` invece di un select seguito da insert: anche la
-  -- creazione della riga dell'anno è una corsa, il primo gennaio.
+  -- Il contatore si riallinea PRIMA di incrementare, e non è pignoleria: al
+  -- primo giro, in un database appena creato, la riga dell'anno non esiste
+  -- ancora mentre le fatture del seed sì — perché lo schema si esegue prima
+  -- dei dati. Senza questa riga il progressivo ripartirebbe da 1 e collider
+  -- ebbe con FT-AAAA-0001 già presente.
+  --
+  -- Vale anche dopo: se qualcuno importa fatture scrivendo il numero a mano,
+  -- il contatore si adegua da solo invece di produrre duplicati finché non
+  -- rilancia il file.
+  select coalesce(max(nullif(regexp_replace(numero, '^FT-\d{4}-', ''), '')::int), 0)
+  into v_massimo
+  from public.fatture
+  where numero ~ ('^FT-' || p_anno::text || '-\d+$');
+
   insert into public.progressivi_fattura (anno, ultimo)
-  values (p_anno, 1)
+  values (p_anno, v_massimo + 1)
   on conflict (anno) do update
-    set ultimo = public.progressivi_fattura.ultimo + 1,
+    -- `greatest` e non `+ 1` secco: se il massimo in tabella è più avanti del
+    -- contatore, vince la tabella.
+    set ultimo = greatest(public.progressivi_fattura.ultimo, excluded.ultimo - 1) + 1,
         aggiornato_il = now()
   returning ultimo into v_prossimo;
 
@@ -1117,6 +1148,7 @@ where numero ~ '^FT-\d{4}-\d+$'
 group by 1
 on conflict (anno) do update
   set ultimo = greatest(public.progressivi_fattura.ultimo, excluded.ultimo);
+
 
 
 -- ##########################################################################
@@ -1297,6 +1329,7 @@ insert into public.luoghi_intervento (
    'Perimetro dello stabilimento','Via dell''Industria','22','40138','Bologna','BO','facile',
    'Serve DUVRI firmato prima di entrare in stabilimento.',true)
 on conflict (id) do nothing;
+
 
 
 -- ##########################################################################
@@ -1700,6 +1733,7 @@ from (
 where t.id = p.id;
 
 
+
 -- ##########################################################################
 -- ##  012_genera_costi_da_fattura.sql
 -- ##########################################################################
@@ -1888,6 +1922,7 @@ comment on function public.annulla_costi_da_fattura(uuid) is
 -- service key, e il client come ripiego quando la edge function non risponde.
 grant execute on function public.genera_costi_da_fattura(uuid) to anon, authenticated;
 grant execute on function public.annulla_costi_da_fattura(uuid) to anon, authenticated;
+
 
 
 -- ##########################################################################
@@ -2081,6 +2116,7 @@ from (
 where f.id = calcolo.id;
 
 
+
 -- ##########################################################################
 -- ##  014_seed_costi.sql
 -- ##########################################################################
@@ -2229,6 +2265,7 @@ insert into public.costi (
   ('00000000-0000-4000-d000-000000000071', current_date - 45, 'altro','Quota associativa di categoria',340,null,null,null,null,null,null,null)
 
 on conflict (id) do nothing;
+
 
 
 -- ##########################################################################
@@ -2461,6 +2498,7 @@ insert into public.commesse (
    'Doppione della 0005, annullata in fase di inserimento.')
 
 on conflict (id) do nothing;
+
 
 
 -- ##########################################################################

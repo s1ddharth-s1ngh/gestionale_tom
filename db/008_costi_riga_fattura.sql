@@ -42,6 +42,13 @@ comment on column public.costi.riga_fattura_id is
 -- non permette di dichiararne il predicato. Non è un problema, perché la
 -- generazione passa dalla funzione `genera_costi_da_fattura` (012) con un
 -- INSERT normale, non da un upsert del client.
+-- `drop` prima del `create`, e non è ridondante con l'`if not exists`: la prima
+-- versione di questo file creava l'indice SENZA il predicato, e `if not exists`
+-- si limiterebbe a trovarne uno con quel nome e a lasciarlo com'è. Chi avesse
+-- già eseguito la versione vecchia si ritroverebbe con l'indice sbagliato e
+-- nessun errore — cioè col difetto che questo file esiste per chiudere.
+drop index if exists public.uq_costi_riga_fattura;
+
 create unique index if not exists uq_costi_riga_fattura
   on public.costi (fattura_fornitore_id, riga_fattura_id)
   where deleted_at is null;
