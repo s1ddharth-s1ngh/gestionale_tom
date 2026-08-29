@@ -1,50 +1,50 @@
-import { fattureMock } from '@/mocks/fatture';
-import { clientiMock } from '@/mocks/clienti';
-import type { FiltriBase, Paginato } from '@/types/comune';
-import { impagina, ritardo } from '@/types/comune';
+import { supabase } from '@/lib/supabase';
+import { PER_PAGINA_DEFAULT, type Paginato } from '@/types/comune';
 import type {
   Fattura,
   FatturaFiltri,
   FatturaInput,
   IncassoInput,
-  RigaFattura,
   SollecitoInput,
   StatoFattura,
   TipoFattura,
 } from '@/types/fattura';
+import { ALIQUOTA_IVA_DEFAULT } from '@/types/fattura';
 import {
-  ALIQUOTA_IVA_DEFAULT,
-  calcolaStatoFattura,
-  imponibileFattura,
-  incassato,
-  ivaFattura,
-  residuo,
-  totaleFattura,
-} from '@/types/fattura';
-import { matchesSearch, nuovoId } from '@/lib/utils';
+  fatturaDaRiga,
+  num,
+  rigaDaFattura,
+  statoDaVista,
+  type RigaFatturaDb,
+  type RigaFatturaVista,
+} from './fattureMapper';
 
 /**
- * L'unico punto che tocca i dati delle fatture.
+ * Accesso ai dati delle fatture — su Supabase.
  *
- * Oggi legge un array in memoria, domani una `fetch`: le firme sono già quelle
- * che avranno con un backend vero — filtri, ricerca e paginazione sono
- * parametri, non lavoro fatto nel componente.
+ * Segue `clientiService`: firme invariate, filtri e paginazione fatti dal
+ * database, ogni errore lanciato, soft-delete, conteggio dalla stessa query.
  *
- * Le modifiche vivono nella sessione e si perdono al reload. È voluto: si vede
- * l'effetto delle proprie azioni navigando, e si riparte puliti ricaricando.
+ * Una regola in più, ed è quella che conta qui: **si legge da `v_fatture`, si
+ * scrive su `fatture`**. La vista calcola incassato, residuo e stato effettivo
+ * dagli incassi; la tabella conserva solo la decisione umana — `bozza` o
+ * `emessa`, gli unici due valori che il `CHECK` accetta. Leggere dalla tabella
+ * significherebbe ricalcolare lo stato in TypeScript e ritrovarsi con due
+ * regole che prima o poi non coincidono.
  */
 
-/** Copia mutabile: il mock resta il punto di partenza a ogni ricarica di pagina. */
-let fatture: Fattura[] = fattureMock.map((f) => ({ ...f }));
+const VISTA = 'v_fatture';
+const TABELLA = 'fatture';
 
-/**
- * La fattura come la vogliono elenco, scadenzario e dettaglio: con i derivati
- * già calcolati e il nome del cliente già risolto.
- *
- * I derivati si calcolano qui e non nei componenti perché sono la stessa
- * verità in quattro schermate: quattro `reduce` scritti in quattro posti
- * diventano quattro totali leggermente diversi appena si tocca l'IVA.
- */
+/** PostgREST cappa comunque a 1000 righe: le letture senza `.range()` stanno
+ *  solo dove il volume è per forza piccolo (scadenzario, conteggi). */
+const MAX_SELECT = 1000;
+
+function esplodi(contesto: string, error: { message: string } | null): void {
+  if (error) throw new Error(`${contesto}: ${error.message}`);
+}
+
+/** La fattura come la vogliono elenco, scadenzario e dettaglio. */
 export interface FatturaConCliente extends Fattura {
   clienteDenominazione: string;
   imponibile: number;
@@ -53,297 +53,363 @@ export interface FatturaConCliente extends Fattura {
   incassato: number;
   residuo: number;
   stato: StatoFattura;
-  /** Negativo se scaduta, positivo se ancora nei termini, `null` senza scadenza. */
+  /** Negativo se scaduta, positivo se nei termini, `null` senza scadenza. */
   giorniAllaScadenza: number | null;
 }
 
-/**
- * TODO(chat A): diventa una lettura di `clientiService` quando esiste. Finché
- * la fattura mostra `cli-003` invece del nome, elenco e scadenzario non si
- * possono giudicare a schermo — che è l'unico modo che abbiamo di sapere se
- * funzionano.
- */
-function denominazione(clienteId: string): string {
-  return clientiMock.find((c) => c.id === clienteId)?.denominazione ?? clienteId;
-}
-
-function giorniAllaScadenza(dataScadenza: string | undefined, oggi: Date): number | null {
-  if (!dataScadenza) return null;
-  const scadenza = new Date(dataScadenza);
-  scadenza.setHours(12, 0, 0, 0);
-  const riferimento = new Date(oggi);
-  riferimento.setHours(12, 0, 0, 0);
-  return Math.round((scadenza.getTime() - riferimento.getTime()) / 86_400_000);
-}
-
-/**
- * `oggi` si passa una volta sola per tutta la lista: valutare cento fatture
- * contro cento istanti diversi è il modo per avere una riga «scaduta» e la sua
- * gemella no, a mezzanotte in punto.
- */
-function arricchisci(f: Fattura, oggi: Date): FatturaConCliente {
-  const totale = totaleFattura(f.righe);
-  const riscosso = incassato(f.incassi);
-
+function daVista(r: RigaFatturaVista): FatturaConCliente {
   return {
-    ...f,
-    clienteDenominazione: denominazione(f.clienteId),
-    imponibile: imponibileFattura(f.righe),
-    iva: ivaFattura(f.righe),
-    totale,
-    incassato: riscosso,
-    residuo: residuo(f),
-    stato: calcolaStatoFattura(f, oggi),
-    giorniAllaScadenza: giorniAllaScadenza(f.dataScadenza, oggi),
+    ...fatturaDaRiga(r),
+    clienteDenominazione: r.cliente_denominazione,
+    imponibile: num(r.imponibile),
+    iva: num(r.iva),
+    totale: num(r.totale),
+    // Incassato e residuo li ha già sommati la vista: rifarli qui vorrebbe
+    // dire due somme che si possono contraddire.
+    incassato: num(r.incassato),
+    residuo: num(r.residuo),
+    stato: statoDaVista(r),
+    giorniAllaScadenza: giorniA(r.data_scadenza),
   };
 }
 
-function trova(id: string): Fattura {
-  const f = fatture.find((x) => x.id === id);
-  if (!f) throw new Error(`Fattura ${id} non trovata`);
-  return f;
+/** Giorni interi, calcolati a mezzogiorno: sull'ora zero un fuso di differenza
+ *  sposta il conteggio di un giorno, e una fattura «scade oggi» quando in
+ *  realtà scadeva ieri. */
+function giorniA(dataScadenza: string | null): number | null {
+  if (!dataScadenza) return null;
+  const scadenza = new Date(dataScadenza);
+  scadenza.setHours(12, 0, 0, 0);
+  const oggi = new Date();
+  oggi.setHours(12, 0, 0, 0);
+  return Math.round((scadenza.getTime() - oggi.getTime()) / 86_400_000);
 }
 
-function scrivi(id: string, patch: Partial<Fattura>): Fattura {
-  const aggiornata: Fattura = { ...trova(id), ...patch, aggiornataIl: new Date().toISOString() };
-  fatture = fatture.map((f) => (f.id === id ? aggiornata : f));
-  return aggiornata;
-}
-
-/** FT-AAAA-NNNN: progressivo annuale, e l'anno lo decide la data di emissione. */
-function prossimoNumero(): string {
+/**
+ * FT-AAAA-NNNN, progressivo annuale.
+ *
+ * Legge l'ultimo numero dell'anno e aggiunge uno. Con un utente basta; con due
+ * che emettono nello stesso istante il `unique` sul numero rifiuta il secondo,
+ * ed è il comportamento giusto — meglio un errore che due fatture con lo
+ * stesso protocollo. La sequenza vera è lavoro da database, il giorno che serve.
+ */
+async function prossimoNumero(): Promise<string> {
   const anno = new Date().getFullYear();
   const prefisso = `FT-${anno}-`;
-  const ultimo = fatture
-    .filter((f) => f.numero.startsWith(prefisso))
-    .map((f) => Number(f.numero.slice(prefisso.length)))
-    .reduce((max, n) => (Number.isFinite(n) && n > max ? n : max), 0);
-  return `${prefisso}${String(ultimo + 1).padStart(4, '0')}`;
+
+  const { data, error } = await supabase
+    .from(TABELLA)
+    .select('numero')
+    .like('numero', `${prefisso}%`)
+    .order('numero', { ascending: false })
+    .limit(1);
+  esplodi('Lettura ultimo numero fattura', error);
+
+  const ultimo = (data ?? [])[0]?.numero as string | undefined;
+  const progressivo = ultimo ? Number(ultimo.slice(prefisso.length)) : 0;
+  const prossimo = (Number.isFinite(progressivo) ? progressivo : 0) + 1;
+  return `${prefisso}${String(prossimo).padStart(4, '0')}`;
 }
 
-function conIdRighe(righe: Omit<RigaFattura, 'id'>[]): RigaFattura[] {
-  return righe.map((r) => ({ ...r, id: nuovoId() }));
+/** Rilegge dalla tabella dopo una scrittura. */
+async function rileggi(id: string): Promise<Fattura> {
+  const { data, error } = await supabase.from(TABELLA).select('*').eq('id', id).maybeSingle();
+  esplodi('Rilettura fattura', error);
+  if (!data) throw new Error('Fattura non trovata dopo la scrittura');
+  return fatturaDaRiga(data as unknown as RigaFatturaDb);
 }
 
-/** Le più recenti in cima: chi apre l'elenco cerca quasi sempre l'ultima emessa.
- *  Le bozze non hanno data di emissione e restano in testa, dove servono. */
-function perData(a: Fattura, b: Fattura): number {
-  if (!a.dataEmissione && !b.dataEmissione) return b.numero.localeCompare(a.numero);
-  if (!a.dataEmissione) return -1;
-  if (!b.dataEmissione) return 1;
-  return b.dataEmissione.localeCompare(a.dataEmissione);
+/** Legge una colonna JSONB da riscrivere. */
+async function arrayJson<T>(id: string, colonna: 'incassi' | 'solleciti'): Promise<T[]> {
+  const { data, error } = await supabase.from(TABELLA).select(colonna).eq('id', id).maybeSingle();
+  esplodi(`Lettura ${colonna}`, error);
+  return ((data as Record<string, unknown> | null)?.[colonna] as T[]) ?? [];
+}
+
+function oggiIso(): string {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+}
+
+function sommaGiorni(data: string, giorni: number): string {
+  const d = new Date(data);
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + giorni);
+  return d.toISOString().slice(0, 10);
+}
+
+function arrotonda(v: number): number {
+  return Math.round(v * 100) / 100;
 }
 
 export const fattureService = {
   async list(filtri?: FatturaFiltri): Promise<Paginato<FatturaConCliente>> {
-    await ritardo();
-    const oggi = new Date();
+    const perPagina = filtri?.perPagina ?? PER_PAGINA_DEFAULT;
+    const pagina = Math.max(1, filtri?.pagina ?? 1);
+    const da = (pagina - 1) * perPagina;
 
-    // L'arricchimento sta PRIMA del filtro: `stato` e il nome del cliente sono
-    // derivati, e su un campo che non esiste ancora non si può filtrare.
-    let righe = fatture.map((f) => arricchisci(f, oggi));
+    let q = supabase.from(VISTA).select('*', { count: 'exact' });
 
-    if (filtri?.stato) righe = righe.filter((f) => f.stato === filtri.stato);
-    if (filtri?.clienteId) righe = righe.filter((f) => f.clienteId === filtri.clienteId);
-    if (filtri?.commessaId) righe = righe.filter((f) => f.commessaId === filtri.commessaId);
-    if (filtri?.dal) righe = righe.filter((f) => !!f.dataScadenza && f.dataScadenza >= filtri.dal!);
-    if (filtri?.al) righe = righe.filter((f) => !!f.dataScadenza && f.dataScadenza <= filtri.al!);
+    // Si filtra su `stato_effettivo` e non su `stato`: l'utente sceglie
+    // «scaduta», che come valore in tabella non esiste.
+    if (filtri?.stato) q = q.eq('stato_effettivo', filtri.stato);
+    if (filtri?.clienteId) q = q.eq('cliente_id', filtri.clienteId);
+    if (filtri?.commessaId) q = q.eq('commessa_id', filtri.commessaId);
+    if (filtri?.dal) q = q.gte('data_scadenza', filtri.dal);
+    if (filtri?.al) q = q.lte('data_scadenza', filtri.al);
 
-    if (filtri?.q) {
-      righe = righe.filter((f) =>
-        matchesSearch(filtri.q!, f.numero, f.clienteDenominazione, f.note, ...f.righe.map((r) => r.descrizione)),
+    const termine = filtri?.q?.trim();
+    if (termine) {
+      // Virgole e parentesi spezzerebbero la sintassi di `or()`.
+      const t = termine.replace(/[,()]/g, ' ');
+      q = q.or(
+        [`numero.ilike.%${t}%`, `note.ilike.%${t}%`, `cliente_denominazione.ilike.%${t}%`].join(','),
       );
     }
 
-    return impagina([...righe].sort(perData), filtri as FiltriBase);
+    // Le bozze non hanno data di emissione: con `nullsFirst: false` finiscono
+    // in fondo, dove servono — chi apre l'elenco cerca l'ultima emessa.
+    q = q
+      .order('data_emissione', { ascending: false, nullsFirst: false })
+      .order('numero', { ascending: false })
+      .range(da, da + perPagina - 1);
+
+    const { data, error, count } = await q;
+    esplodi('Lettura fatture', error);
+
+    return {
+      righe: ((data ?? []) as unknown as RigaFatturaVista[]).map(daVista),
+      totale: count ?? 0,
+      pagina,
+      perPagina,
+    };
   },
 
   async getById(id: string): Promise<FatturaConCliente | null> {
-    await ritardo(200);
-    const f = fatture.find((x) => x.id === id);
-    return f ? arricchisci(f, new Date()) : null;
+    const { data, error } = await supabase.from(VISTA).select('*').eq('id', id).maybeSingle();
+    esplodi('Lettura fattura', error);
+    return data ? daVista(data as unknown as RigaFatturaVista) : null;
   },
 
   /** Le fatture di un cliente, per la sezione «Fatture» della sua scheda. */
   async listPerCliente(clienteId: string): Promise<FatturaConCliente[]> {
-    await ritardo(200);
-    const oggi = new Date();
-    return fatture
-      .filter((f) => f.clienteId === clienteId)
-      .sort(perData)
-      .map((f) => arricchisci(f, oggi));
+    const { data, error } = await supabase
+      .from(VISTA)
+      .select('*')
+      .eq('cliente_id', clienteId)
+      .order('data_emissione', { ascending: false, nullsFirst: false })
+      .range(0, MAX_SELECT - 1);
+    esplodi('Lettura fatture del cliente', error);
+    return ((data ?? []) as unknown as RigaFatturaVista[]).map(daVista);
   },
 
   /**
-   * Lo scadenzario: solo ciò che ha ancora un residuo, ordinato per scadenza
-   * crescente. Le pagate escono di scena da sole — non c'è un filtro da
-   * ricordarsi di applicare, e quindi non c'è modo di sbagliarlo.
+   * Lo scadenzario: quello che ha ancora un residuo, dalla scadenza più
+   * vecchia. Il filtro è sullo stato effettivo, quindi le pagate escono da
+   * sole — non c'è un filtro da ricordarsi di applicare, e quindi non c'è
+   * modo di sbagliarlo.
    */
   async scadenzario(): Promise<FatturaConCliente[]> {
-    await ritardo();
-    const oggi = new Date();
-    return fatture
-      .map((f) => arricchisci(f, oggi))
-      .filter((f) => f.stato === 'emessa' || f.stato === 'pagata_parziale' || f.stato === 'scaduta')
-      .sort((a, b) => (a.dataScadenza ?? '9999').localeCompare(b.dataScadenza ?? '9999'));
+    const { data, error } = await supabase
+      .from(VISTA)
+      .select('*')
+      .in('stato_effettivo', ['emessa', 'pagata_parziale', 'scaduta'])
+      .order('data_scadenza', { ascending: true, nullsFirst: false })
+      .range(0, MAX_SELECT - 1);
+    esplodi('Lettura scadenzario', error);
+    return ((data ?? []) as unknown as RigaFatturaVista[]).map(daVista);
   },
 
-  /**
-   * Conteggi per le pill di filtro. Vengono dall'archivio intero, non dalla
-   * pagina corrente: un contatore che cambia cambiando pagina non è un contatore.
-   */
+  /** I contatori delle pill: dall'archivio intero, non dalla pagina mostrata. */
   async contaPerStato(): Promise<Record<StatoFattura | 'tutte', number>> {
-    await ritardo(150);
-    const oggi = new Date();
-    const conta = {
-      tutte: fatture.length,
+    const { data, error } = await supabase
+      .from(VISTA)
+      .select('stato_effettivo')
+      .range(0, MAX_SELECT - 1);
+    esplodi('Conteggio fatture', error);
+
+    const righe = (data ?? []) as { stato_effettivo: StatoFattura }[];
+    const conta: Record<StatoFattura | 'tutte', number> = {
+      tutte: righe.length,
       bozza: 0,
       emessa: 0,
       pagata_parziale: 0,
       pagata: 0,
       scaduta: 0,
     };
-    for (const f of fatture) conta[calcolaStatoFattura(f, oggi)] += 1;
+    for (const r of righe) if (r.stato_effettivo in conta) conta[r.stato_effettivo] += 1;
     return conta;
   },
 
   async create(input: FatturaInput): Promise<Fattura> {
-    await ritardo(400);
-    const adesso = new Date().toISOString();
-    const nuova: Fattura = {
-      id: nuovoId(),
-      numero: prossimoNumero(),
-      tipo: input.tipo,
-      clienteId: input.clienteId,
-      commessaId: input.commessaId,
-      dataEmissione: input.dataEmissione,
-      dataScadenza: input.dataScadenza,
-      righe: conIdRighe(input.righe),
-      incassi: [],
-      solleciti: [],
-      datiFE: input.datiFE,
-      note: input.note,
-      creataIl: adesso,
-      aggiornataIl: adesso,
-    };
-    fatture = [nuova, ...fatture];
-    return nuova;
+    const numero = await prossimoNumero();
+
+    // `chk_emessa` vuole tutte e due le date su una emessa: se il chiamante dà
+    // solo l'emissione, la scadenza la mettiamo a 30 giorni invece di far
+    // fallire l'insert con un messaggio da database.
+    const dataScadenza =
+      input.dataEmissione && !input.dataScadenza
+        ? sommaGiorni(input.dataEmissione, 30)
+        : input.dataScadenza;
+
+    const { data, error } = await supabase
+      .from(TABELLA)
+      .insert(rigaDaFattura({ ...input, dataScadenza, numero }))
+      .select('*')
+      .single();
+    esplodi('Creazione fattura', error);
+    return fatturaDaRiga(data as unknown as RigaFatturaDb);
   },
 
   async update(id: string, patch: Partial<FatturaInput>): Promise<Fattura> {
-    await ritardo(400);
-    return scrivi(id, {
-      ...patch,
-      righe: patch.righe ? conIdRighe(patch.righe) : undefined,
-    } as Partial<Fattura>);
+    const riga = rigaDaFattura(patch);
+    // Un UPDATE senza colonne è un errore di PostgREST, non un no-op.
+    if (Object.keys(riga).length > 0) {
+      const { error } = await supabase.from(TABELLA).update(riga).eq('id', id);
+      esplodi('Aggiornamento fattura', error);
+    }
+    return rileggi(id);
   },
 
-  /** Emette una bozza: da qui in poi la fattura ha un numero e una scadenza. */
-  async emetti(id: string, opts: { dataEmissione?: string; giorniPagamento?: number } = {}): Promise<Fattura> {
-    await ritardo(400);
+  /** Emette una bozza: da qui in poi ha una data e una scadenza. */
+  async emetti(
+    id: string,
+    opts: { dataEmissione?: string; giorniPagamento?: number } = {},
+  ): Promise<Fattura> {
     const emissione = opts.dataEmissione ?? oggiIso();
-    return scrivi(id, {
-      dataEmissione: emissione,
-      dataScadenza: sommaGiorni(emissione, opts.giorniPagamento ?? 30),
-    });
-  },
-
-  async registraIncasso(id: string, input: IncassoInput): Promise<Fattura> {
-    await ritardo(400);
-    const fattura = trova(id);
-    return scrivi(id, { incassi: [...fattura.incassi, { ...input, id: nuovoId() }] });
-  },
-
-  async rimuoviIncasso(id: string, incassoId: string): Promise<Fattura> {
-    await ritardo(300);
-    const fattura = trova(id);
-    return scrivi(id, { incassi: fattura.incassi.filter((i) => i.id !== incassoId) });
-  },
-
-  async registraSollecito(id: string, input: SollecitoInput): Promise<Fattura> {
-    await ritardo(400);
-    const fattura = trova(id);
-    return scrivi(id, { solleciti: [...fattura.solleciti, { ...input, id: nuovoId() }] });
-  },
-
-  async remove(id: string): Promise<void> {
-    await ritardo(300);
-    fatture = fatture.filter((f) => f.id !== id);
+    const { error } = await supabase
+      .from(TABELLA)
+      .update({
+        stato: 'emessa',
+        data_emissione: emissione,
+        data_scadenza: sommaGiorni(emissione, opts.giorniPagamento ?? 30),
+      })
+      .eq('id', id);
+    esplodi('Emissione fattura', error);
+    return rileggi(id);
   },
 
   /**
-   * Emette una fattura a partire da una commessa completata.
+   * Gli incassi stanno in una colonna JSONB: si rilegge l'array, si aggiunge,
+   * si riscrive. Lo stato si aggiorna da sé, perché lo calcola la vista.
    *
-   * Il tipo decide l'importo: `acconto` prende la percentuale del totale,
-   * `saldo` prende quello che resta dopo gli acconti già emessi sulla stessa
-   * commessa. È il calcolo che nessuno vuole rifare a mano ogni volta, ed è il
-   * punto in cui il modulo Fatture si aggancia al modulo Commesse.
+   * Con un utente va bene. Con due che incassano nello stesso momento il
+   * secondo sovrascrive il primo: è il punto in cui servirà una tabella
+   * `incassi` vera — non prima, perché fin qui il JSONB fa risparmiare una
+   * query su ogni fattura letta.
+   */
+  async registraIncasso(id: string, input: IncassoInput): Promise<Fattura> {
+    const incassi = await arrayJson<IncassoInput & { id: string }>(id, 'incassi');
+    const { error } = await supabase
+      .from(TABELLA)
+      .update({ incassi: [...incassi, { ...input, id: crypto.randomUUID() }] })
+      .eq('id', id);
+    esplodi('Registrazione incasso', error);
+    return rileggi(id);
+  },
+
+  async rimuoviIncasso(id: string, incassoId: string): Promise<Fattura> {
+    const incassi = await arrayJson<{ id: string }>(id, 'incassi');
+    const { error } = await supabase
+      .from(TABELLA)
+      .update({ incassi: incassi.filter((i) => i.id !== incassoId) })
+      .eq('id', id);
+    esplodi('Eliminazione incasso', error);
+    return rileggi(id);
+  },
+
+  async registraSollecito(id: string, input: SollecitoInput): Promise<Fattura> {
+    const solleciti = await arrayJson<SollecitoInput & { id: string }>(id, 'solleciti');
+    const { error } = await supabase
+      .from(TABELLA)
+      .update({ solleciti: [...solleciti, { ...input, id: crypto.randomUUID() }] })
+      .eq('id', id);
+    esplodi('Registrazione sollecito', error);
+    return rileggi(id);
+  },
+
+  /** Soft-delete: la riga resta, esce dalle query e dalla vista. */
+  async remove(id: string): Promise<void> {
+    const { error } = await supabase
+      .from(TABELLA)
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id);
+    esplodi('Cancellazione fattura', error);
+  },
+
+  /**
+   * Emette una fattura a partire da una commessa.
+   *
+   * `acconto` prende la percentuale dell'imponibile; `saldo` prende quello che
+   * resta dopo gli acconti già emessi sulla stessa commessa — il calcolo che
+   * nessuno vuole rifare a mano ogni volta, e che il database sa fare perché
+   * gli imponibili sono una colonna.
    */
   async emettiDaCommessa(input: EmissioneDaCommessa): Promise<Fattura> {
-    await ritardo(400);
+    const giaFatturato = await fattureService.giaFatturatoSuCommessa(input.commessaId);
 
-    const giaEmesso = fatture
-      .filter((f) => f.commessaId === input.commessaId && f.dataEmissione)
-      .reduce((tot, f) => tot + totaleFattura(f.righe), 0);
-
-    const imponibilePieno = input.imponibile;
-    const percentuale = input.tipo === 'acconto' ? (input.percentuale ?? 30) / 100 : 1;
-
-    // Il saldo è il totale meno quello che si è già fatturato: se non ci sono
-    // acconti coincide col totale, quindi il caso «unica» non ha un ramo suo.
     const importo =
       input.tipo === 'saldo'
-        ? Math.max(0, Math.round((imponibilePieno - giaEmesso / (1 + ALIQUOTA_IVA_DEFAULT / 100)) * 100) / 100)
-        : Math.round(imponibilePieno * percentuale * 100) / 100;
+        ? Math.max(0, arrotonda(input.imponibile - giaFatturato))
+        : arrotonda(input.imponibile * ((input.tipo === 'acconto' ? (input.percentuale ?? 30) : 100) / 100));
 
     const emissione = input.dataEmissione ?? oggiIso();
-    const adesso = new Date().toISOString();
 
-    const nuova: Fattura = {
-      id: nuovoId(),
-      numero: prossimoNumero(),
+    return fattureService.create({
       tipo: input.tipo,
       clienteId: input.clienteId,
       commessaId: input.commessaId,
       dataEmissione: emissione,
       dataScadenza: sommaGiorni(emissione, input.giorniPagamento ?? 30),
+      note: input.note,
       righe: [
         {
-          id: nuovoId(),
           descrizione: descrizioneDaCommessa(input),
           quantita: 1,
           prezzoUnitario: importo,
           aliquotaIva: input.aliquotaIva ?? ALIQUOTA_IVA_DEFAULT,
         },
       ],
-      incassi: [],
-      solleciti: [],
-      note: input.note,
-      creataIl: adesso,
-      aggiornataIl: adesso,
-    };
+    });
+  },
 
-    fatture = [nuova, ...fatture];
-    return nuova;
+  /**
+   * Quanto imponibile è già stato fatturato su una commessa.
+   *
+   * Somma la colonna `imponibile` e non le righe JSONB: è la colonna che il
+   * database mantiene a ogni scrittura, ed è quella su cui un domani si
+   * potranno fare i conti in SQL senza tirarsi in casa le righe.
+   */
+  async giaFatturatoSuCommessa(commessaId: string): Promise<number> {
+    const { data, error } = await supabase
+      .from(TABELLA)
+      .select('imponibile')
+      .eq('commessa_id', commessaId)
+      .not('data_emissione', 'is', null)
+      .is('deleted_at', null);
+    esplodi('Lettura fatturato della commessa', error);
+
+    return arrotonda(
+      (data ?? []).reduce((t, r) => t + num((r as { imponibile: number | string }).imponibile), 0),
+    );
   },
 };
 
 /**
  * Quello che serve per fatturare una commessa.
  *
- * È un oggetto piatto e non una `Commessa`: così `commesseService` può
- * chiamare questa funzione senza che il modulo Fatture dipenda dal tipo
- * `Commessa`, e le due chat restano scollegate come devono.
+ * È un oggetto piatto e non una `Commessa`: così `commesseService` chiama
+ * questa funzione senza che il modulo Fatture dipenda dal tipo `Commessa`, e i
+ * due moduli restano scollegati come devono.
  */
 export interface EmissioneDaCommessa {
   commessaId: string;
   clienteId: string;
-  /** Numero della commessa, per scriverlo nella descrizione della riga. */
   numeroCommessa: string;
   /** Imponibile pieno del lavoro: la percentuale la applica il service. */
   imponibile: number;
   tipo: TipoFattura;
-  /** Solo per gli acconti. Il default è il 30%, che è l'uso corrente. */
   percentuale?: number;
   aliquotaIva?: number;
   dataEmissione?: string;
@@ -356,18 +422,4 @@ function descrizioneDaCommessa(input: EmissioneDaCommessa): string {
   if (input.tipo === 'acconto') return `Acconto ${input.percentuale ?? 30}% su ${riferimento}`;
   if (input.tipo === 'saldo') return `Saldo lavori, ${riferimento}`;
   return `Lavori come da ${riferimento}`;
-}
-
-/** Oggi in ISO `AAAA-MM-GG`, coerente con come sono scritte tutte le date. */
-function oggiIso(): string {
-  const d = new Date();
-  d.setHours(12, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
-}
-
-function sommaGiorni(data: string, giorni: number): string {
-  const d = new Date(data);
-  d.setHours(12, 0, 0, 0);
-  d.setDate(d.getDate() + giorni);
-  return d.toISOString().slice(0, 10);
 }
