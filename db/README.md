@@ -24,6 +24,37 @@ oppure via `psql`.
 016_seed_fatture_fornitore.sql  dati di esempio: 10 fatture ricevute — richiede 014
 ```
 
+## Verificato su un Postgres vero
+
+Non è teoria: lo schema è stato installato su un PostgreSQL 15 locale, prima file per file
+nell'ordine qui sopra, poi da `TUTTO.sql` su un database vuoto. Cosa è stato controllato:
+
+- **Installazione pulita** — nessun errore, e i conteggi tornano: 12 clienti, 24 preventivi,
+  15 commesse, 13 fatture, 38 costi, 9 fornitori, 10 fatture fornitore.
+- **Gli stati derivati** — `v_fatture` e `v_fatture_fornitore` producono tutti e cinque gli
+  stati, e i totali di ogni documento coincidono con la somma delle sue righe.
+- **Le regole scritte due volte** — `stato_effettivo` delle viste è stato confrontato riga per
+  riga con `calcolaStatoFattura()` e `statoEffettivoFattura()` del frontend, sui dati veri del
+  seed: coincidono su tutte e 24 le fatture. Era il rischio più concreto di questo schema,
+  perché la stessa regola vive in due linguaggi.
+- **I permessi** — `anon` legge e scrive i dati (oggi è voluto: non c'è login), ma non può
+  né leggere né scrivere `progressivi_fattura`.
+- **La numerazione** — due chiamate di fila danno due numeri diversi, richiamarla sulla stessa
+  fattura restituisce il numero già assegnato senza bruciarne uno nuovo, e non si generano
+  duplicati contro le fatture del seed.
+- **La generazione dei costi** — `genera_costi_da_fattura()` chiamata due volte lascia le
+  righe che ha creato la prima volta.
+
+Per rifarlo, con `psql` in PATH:
+
+```bash
+createdb tom_prova
+psql -d tom_prova -c "create role anon nologin; create role authenticated nologin; create role service_role nologin;"
+psql -d tom_prova -v ON_ERROR_STOP=1 -f db/TUTTO.sql
+```
+
+I tre ruoli servono solo in locale: su Supabase esistono già.
+
 **`006_rls.sql` va rilanciato dopo il `007`**: quel file aggiunge due tabelle con RLS attiva,
 e finché non ricevono una policy rispondono zero righe a tutti — che a schermo si legge come
 "le fatture fornitore non ci sono" invece che "non hai il permesso".

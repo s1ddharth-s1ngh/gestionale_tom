@@ -58,6 +58,56 @@ comment on schema public is
 
 
 -- =============================================================================
+-- I GRANT, che le policy da sole non sostituiscono
+-- =============================================================================
+-- Una policy dice CHI può vedere QUALI righe. Il permesso di toccare la tabella
+-- è un'altra cosa, e viene prima: senza `grant`, `anon` prende «permesso negato»
+-- e la policy non entra nemmeno in gioco.
+--
+-- Su Supabase di solito non ci si accorge della differenza, perché il progetto
+-- nasce con delle default privileges che concedono tutto ad anon e
+-- authenticated sulle tabelle nuove di `public`. Ma sono un'impostazione del
+-- progetto, non parte di questo schema: su un database creato altrove — un
+-- Postgres locale per provare le migrazioni, un self-hosted, un ripristino da
+-- dump — lo schema si installa senza un errore e poi risponde «permesso
+-- negato» a ogni query. Verificato: succede davvero.
+--
+-- Quindi i permessi si dichiarano qui, e lo schema smette di dipendere da come
+-- è stato creato il progetto.
+
+grant usage on schema public to anon, authenticated, service_role;
+
+grant select, insert, update, delete on all tables in schema public
+  to anon, authenticated, service_role;
+
+-- Le viste servono in sola lettura: sono derivazioni, si scrive sulle tabelle.
+-- (`all tables` comprende già le viste, ma la revoca qui sotto è esplicita.)
+grant usage, select on all sequences in schema public to anon, authenticated, service_role;
+
+-- Le tabelle create DOPO questo file prendono gli stessi permessi senza doverlo
+-- rilanciare. È la stessa cosa che fa Supabase, scritta dentro lo schema.
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to anon, authenticated, service_role;
+
+-- ── L'eccezione: i progressivi ───────────────────────────────────────────────
+-- `progressivi_fattura` (db/009) non è un dato dell'applicazione: è il contatore
+-- che rende unica la numerazione. Nessuno deve poterlo scrivere dal browser —
+-- alzare quel numero a mano significa saltare dei protocolli, abbassarlo
+-- significa emettere due fatture con lo stesso.
+--
+-- `assegna_numero_fattura` continua a funzionare perché è `security definer`:
+-- gira come il proprietario della tabella, che alla RLS non è soggetto.
+do $$
+begin
+  if to_regclass('public.progressivi_fattura') is not null then
+    execute 'alter table public.progressivi_fattura enable row level security';
+    execute 'revoke all on public.progressivi_fattura from anon, authenticated';
+  end if;
+end
+$$;
+
+
+-- =============================================================================
 -- FASE 2 — quando ci sarà il login. NON eseguire adesso: senza autenticazione
 -- queste policy rendono l'app vuota, non sicura.
 -- =============================================================================

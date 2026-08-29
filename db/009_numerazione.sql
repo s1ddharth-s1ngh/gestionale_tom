@@ -26,6 +26,19 @@ create table if not exists public.progressivi_fattura (
 comment on table public.progressivi_fattura is
   'Un contatore per anno. Il lock di riga su questa tabella e cio che rende atomica la numerazione.';
 
+-- Il contatore non è un dato dell'applicazione e non si tocca dal browser:
+-- alzarlo a mano salta dei protocolli, abbassarlo fa emettere due fatture con
+-- lo stesso numero. RLS attiva e nessuna policy: chi non è il proprietario non
+-- vede niente.
+--
+-- `assegna_numero_fattura` continua a funzionare perché è `security definer` e
+-- gira come il proprietario, che alla RLS non è soggetto.
+--
+-- Sta qui e non solo in `006_rls.sql` perché quel file si esegue PRIMA di
+-- questo: quando gira, questa tabella non esiste ancora.
+alter table public.progressivi_fattura enable row level security;
+revoke all on public.progressivi_fattura from anon, authenticated;
+
 /**
  * Assegna il prossimo numero all'anno richiesto e lo scrive sulla fattura.
  *
