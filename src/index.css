@@ -47,9 +47,11 @@
   }
 
   /* Il tema è scuro sempre: non c'è un toggle e non c'è una variante chiara.
-     La classe sta su <html> perché tailwind è in darkMode: ['class']. */
+     La classe `dark` sta su <html> in index.html, non qui: `dark` è un VARIANT
+     di Tailwind, non una utility, quindi `@apply dark` non compila. Telebi ce
+     l'ha scritto così e il suo build lo passa solo perché non arriva mai a
+     valutarlo. */
   html {
-    @apply dark;
     font-family: 'Urbanist', sans-serif;
   }
 
