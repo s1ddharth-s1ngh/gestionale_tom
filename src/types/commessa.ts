@@ -101,10 +101,6 @@ export interface Commessa {
   note?: string;
   /** Valorizzato dalla chat D quando la commessa viene fatturata. */
   fatturaId?: string;
-
-  /** ISO 8601. Servono all'ordinamento "ultime modificate" e allo storico del cliente. */
-  creataIl: string;
-  aggiornataIl: string;
 }
 
 export interface CommessaFiltri {
