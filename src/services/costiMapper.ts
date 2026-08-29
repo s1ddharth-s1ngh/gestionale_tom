@@ -38,6 +38,9 @@ export interface RigaCosto {
   mezzo_id: string | null;
   tipo_noleggio: string | null;
   numero_documento: string | null;
+  /** Valorizzate quando il costo nasce dalla registrazione di una fattura fornitore. */
+  fattura_fornitore_id?: string | null;
+  riga_fattura_id?: string | null;
   note: string | null;
   created_at: string;
   updated_at: string;
@@ -100,6 +103,8 @@ export function costoDaRiga(r: RigaCosto): Costo {
     tipoNoleggio: opt(r.tipo_noleggio) as TipoNoleggio | undefined,
     commessaId: opt(r.commessa_id),
     documento: opt(r.numero_documento),
+    fatturaFornitoreId: opt(r.fattura_fornitore_id),
+    rigaFatturaId: opt(r.riga_fattura_id),
     // I litri si leggono solo se l'unità è quella: una quantità in tonnellate
     // mostrata come litri sarebbe peggio di una quantità non mostrata.
     litri: r.unita === UNITA_LITRI && r.quantita != null ? num(r.quantita) : undefined,
@@ -121,6 +126,12 @@ export function rigaDaCosto(input: Partial<CostoInput>): Record<string, unknown>
   if (input.mezzoId !== undefined) riga.mezzo_id = input.mezzoId ?? null;
   if (input.tipoNoleggio !== undefined) riga.tipo_noleggio = input.tipoNoleggio ?? null;
   if (input.documento !== undefined) riga.numero_documento = input.documento ?? null;
+  // Lo scrive solo la generazione automatica dalle fatture fornitore: il drawer
+  // dei costi non lo tocca mai, o un costo inserito a mano risulterebbe nato da
+  // un documento che non l'ha mai contenuto.
+  if (input.fatturaFornitoreId !== undefined)
+    riga.fattura_fornitore_id = input.fatturaFornitoreId ?? null;
+  if (input.rigaFatturaId !== undefined) riga.riga_fattura_id = input.rigaFatturaId ?? null;
   if (input.note !== undefined) riga.note = input.note ?? null;
 
   if (input.litri !== undefined) {

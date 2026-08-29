@@ -173,6 +173,26 @@ export interface Costo {
   commessaId?: string;
   /** Numero della fattura o dello scontrino del fornitore. */
   documento?: string;
+  /**
+   * Presente quando il costo è nato dalla registrazione di una fattura
+   * fornitore, invece che essere stato inserito a mano.
+   *
+   * Serve a due cose, ed entrambe contano: impedire di generare due volte i
+   * costi della stessa fattura — che raddoppierebbe la spesa del periodo senza
+   * che nessuno se ne accorga — e poter risalire dal riepilogo al documento che
+   * giustifica la riga.
+   */
+  fatturaFornitoreId?: string;
+  /**
+   * Id della RIGA di fattura da cui il costo è nato.
+   *
+   * Insieme a `fatturaFornitoreId` forma la chiave unica che rende la doppia
+   * generazione impossibile invece che improbabile: senza, il controllo «questa
+   * fattura ha già dei costi» avrebbe una finestra fra la lettura e la
+   * scrittura, e due click ravvicinati raddoppierebbero la spesa del periodo
+   * senza generare nessun errore.
+   */
+  rigaFatturaId?: string;
   /** Solo per i rifornimenti: serve a leggere il consumo, non solo la spesa. */
   litri?: number;
   note?: string;
@@ -190,6 +210,9 @@ export interface CostoInput {
   tipoNoleggio?: TipoNoleggio;
   commessaId?: string;
   documento?: string;
+  /** Valorizzati solo dalla generazione automatica, mai dal drawer. */
+  fatturaFornitoreId?: string;
+  rigaFatturaId?: string;
   litri?: number;
   note?: string;
 }
