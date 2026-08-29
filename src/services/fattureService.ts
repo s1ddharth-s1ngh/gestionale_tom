@@ -242,9 +242,19 @@ export const fattureService = {
     return conta;
   },
 
+  /**
+   * Crea la fattura, poi le assegna il numero.
+   *
+   * In due tempi e non in uno: il numero lo dà la edge function
+   * `numera-fattura`, che incrementa il progressivo sotto lock e non può
+   * quindi darne due uguali a due schede aperte insieme. Finché la riga non ha
+   * il suo numero porta un `TMP-…`, che il UNIQUE accetta perché è un uuid.
+   *
+   * Se la funzione non è deployata si ricade sul client: legge l'ultimo numero
+   * e aggiunge uno. È la corsa che la funzione evita, ma con un solo utente non
+   * si manifesta — e una schermata che non salva è peggio di un rischio raro.
+   */
   async create(input: FatturaInput): Promise<Fattura> {
-    const numero = await prossimoNumero();
-
     // `chk_emessa` vuole tutte e due le date su una emessa: se il chiamante dà
     // solo l'emissione, la scadenza la mettiamo a 30 giorni invece di far
     // fallire l'insert con un messaggio da database.
@@ -253,13 +263,38 @@ export const fattureService = {
         ? sommaGiorni(input.dataEmissione, 30)
         : input.dataScadenza;
 
+    const numeroProvvisorio = `TMP-${crypto.randomUUID()}`;
+
     const { data, error } = await supabase
       .from(TABELLA)
-      .insert(rigaDaFattura({ ...input, dataScadenza, numero }))
+      .insert(rigaDaFattura({ ...input, dataScadenza, numero: numeroProvvisorio }))
       .select('*')
       .single();
     esplodi('Creazione fattura', error);
-    return fatturaDaRiga(data as unknown as RigaFatturaDb);
+
+    const creata = fatturaDaRiga(data as unknown as RigaFatturaDb);
+    return fattureService.assegnaNumero(creata.id);
+  },
+
+  /**
+   * Assegna il numero definitivo. Idempotente: su una fattura che ce l'ha già
+   * non consuma un progressivo nuovo — vale sia per la funzione sia per il
+   * fallback.
+   */
+  async assegnaNumero(id: string): Promise<Fattura> {
+    const { error: erroreEdge } = await supabase.functions.invoke('numera-fattura', {
+      body: { fatturaId: id },
+    });
+
+    if (!erroreEdge) return rileggi(id);
+
+    const attuale = await rileggi(id);
+    if (!attuale.numero.startsWith('TMP-')) return attuale;
+
+    const numero = await prossimoNumero();
+    const { error } = await supabase.from(TABELLA).update({ numero }).eq('id', id);
+    esplodi('Assegnazione numero fattura', error);
+    return rileggi(id);
   },
 
   async update(id: string, patch: Partial<FatturaInput>): Promise<Fattura> {
