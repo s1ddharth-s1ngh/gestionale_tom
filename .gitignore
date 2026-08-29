@@ -34,3 +34,6 @@ pnpm-debug.log*
 .eslintcache
 *.tsbuildinfo
 supabase/.env
+
+# Le esportazioni per verifica/parita-stati.ts: sono dati, non codice.
+verifica/dati/
