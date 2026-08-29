@@ -18,7 +18,7 @@ export const commesseKeys = {
   list: (f?: CommessaFiltri) => [...commesseKeys.all, 'list', f] as const,
   detail: (id: string) => [...commesseKeys.all, 'detail', id] as const,
   perCliente: (clienteId: string) => [...commesseKeys.all, 'cliente', clienteId] as const,
-  conteggi: () => [...commesseKeys.all, 'conteggi'] as const,
+  conteggi: (f?: ConteggiFiltri) => [...commesseKeys.all, 'conteggi', f] as const,
 };
 
 export function useCommesse(filtri?: CommessaFiltri) {
@@ -48,11 +48,20 @@ export function useCommessePerCliente(clienteId: string | undefined) {
   });
 }
 
-/** Contatori delle pill di filtro: contano l'archivio, non la pagina a schermo. */
-export function useConteggiCommesse() {
+/**
+ * Contatori delle pill di filtro.
+ *
+ * Contano l'archivio e non la pagina a schermo — ma DENTRO la ricerca corrente:
+ * i filtri che non sono lo stato vanno passati, o le pill dicono numeri che non
+ * c'entrano con la tabella che stanno sopra.
+ */
+export type ConteggiFiltri = Omit<CommessaFiltri, 'stato' | 'pagina' | 'perPagina'>;
+
+export function useConteggiCommesse(filtri?: ConteggiFiltri) {
   return useQuery({
-    queryKey: commesseKeys.conteggi(),
-    queryFn: () => commesseService.contaPerStato(),
+    queryKey: commesseKeys.conteggi(filtri),
+    queryFn: () => commesseService.contaPerStato(filtri),
+    placeholderData: (precedenti) => precedenti,
   });
 }
 

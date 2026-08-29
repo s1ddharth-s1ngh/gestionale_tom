@@ -60,6 +60,9 @@ const AZIONE_LABEL: Record<AzioneCommessa, string> = {
 /** Gli stati in cui la scheda è di sola lettura: chiusa o annullata non si tocca. */
 const CHIUSA: StatoCommessa[] = ['completata', 'annullata'];
 
+/** Quanto si aspetta, dopo l'ultima modifica, prima di salvare le lavorazioni. */
+const ATTESA_SALVATAGGIO_MS = 700;
+
 export default function CommessaDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -99,13 +102,45 @@ export default function CommessaDetail() {
     }
   };
 
-  const salvaLista = async (lavorazioni: Lavorazione[]) => {
+  /**
+   * Le lavorazioni si modificano sul posto e si salvano da sole poco dopo.
+   *
+   * Serve una copia locale: `LavorazioniTable` risale a ogni battuta, e
+   * mandare una mutazione per tasto significherebbe una richiesta per lettera
+   * — con l'invalidazione della cache che rimpiazza il campo mentre lo si sta
+   * scrivendo, e il cursore che salta alla fine.
+   *
+   * La copia locale vale finche' non e' stata salvata: appena il salvataggio
+   * va a buon fine si torna al dato del server, che e' l'unico che ha i
+   * derivati giusti e gli id definitivi delle righe nuove.
+   */
+  const [bozzaLavorazioni, setBozzaLavorazioni] = React.useState<Lavorazione[] | null>(null);
+  const timerSalvataggio = React.useRef<ReturnType<typeof setTimeout>>();
+
+  // Cambiando commessa la bozza della precedente non ha piu' senso.
+  React.useEffect(() => {
+    setBozzaLavorazioni(null);
+  }, [id]);
+
+  React.useEffect(() => () => clearTimeout(timerSalvataggio.current), []);
+
+  const lavorazioniVisibili = bozzaLavorazioni ?? commessa?.lavorazioni ?? [];
+
+  const salvaLista = (lavorazioni: Lavorazione[]) => {
     if (!id) return;
-    try {
-      await salvaLavorazioni.mutateAsync({ id, lavorazioni });
-    } catch {
-      toast.error('Non è stato possibile salvare le lavorazioni');
-    }
+    setBozzaLavorazioni(lavorazioni);
+    clearTimeout(timerSalvataggio.current);
+    timerSalvataggio.current = setTimeout(async () => {
+      try {
+        await salvaLavorazioni.mutateAsync({ id, lavorazioni });
+        setBozzaLavorazioni(null);
+      } catch {
+        // La bozza NON si azzera in errore: buttare via quello che si e'
+        // appena scritto perche' il salvataggio non e' riuscito e' il modo
+        // peggiore di dare la notizia.
+        toast.error('Non è stato possibile salvare le lavorazioni');
+      }
+    }, ATTESA_SALVATAGGIO_MS);
   };
 
   return (
@@ -190,10 +225,12 @@ export default function CommessaDetail() {
             <div className="space-y-5 lg:col-span-8">
               <SectionCard title="Lavorazioni">
                 <LavorazioniTable
-                  lavorazioni={commessa.lavorazioni}
+                  lavorazioni={lavorazioniVisibili}
                   onChange={salvaLista}
                   readOnly={readOnly}
-                  salvataggioInCorso={salvaLavorazioni.isPending}
+                  // NON si blocca la tabella durante il salvataggio: si continua
+                  // a scrivere mentre parte, o ogni riga costa mezzo secondo di
+                  // attesa a vuoto.
                 />
               </SectionCard>
 

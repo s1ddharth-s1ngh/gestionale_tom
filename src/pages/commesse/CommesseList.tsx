@@ -84,7 +84,9 @@ export default function CommesseList() {
   });
 
   const elenco = useCommesse(filtri);
-  const conteggi = useConteggiCommesse();
+  // I contatori ricevono la ricerca ma NON lo stato: devono dire quante ce ne
+  // sono in ogni stato dentro la ricerca corrente, ed è tutto il loro senso.
+  const conteggi = useConteggiCommesse({ q: ricercaApplicata || undefined });
 
   const righe = elenco.data?.righe ?? [];
   const totale = elenco.data?.totale ?? 0;
@@ -98,12 +100,14 @@ export default function CommesseList() {
         title="Commesse"
         subtitle="I lavori pianificati, in corso e chiusi"
         meta={
-          // Il conteggio viene dai contatori dell'archivio, non dalla pagina:
-          // "20 commesse" sotto una tabella che ne mostra 20 di 137 è una bugia.
+          // Il conteggio viene dai contatori e non dalla pagina: "20 commesse"
+          // sotto una tabella che ne mostra 20 di 137 è una bugia. Con una
+          // ricerca attiva il numero è quello trovato, e l'etichetta lo dice —
+          // «in archivio» accanto a un numero filtrato sarebbe la stessa bugia.
           conteggi.data ? (
             <span className="text-[12px] tabular-nums text-white/40">
-              {conteggi.data.tutte} {pluralize(conteggi.data.tutte, 'commessa', 'commesse')} in
-              archivio · {conteggi.data.in_corso} in corso
+              {conteggi.data.tutte} {pluralize(conteggi.data.tutte, 'commessa', 'commesse')}
+              {ricercaApplicata ? ' trovate' : ' in archivio'} · {conteggi.data.in_corso} in corso
             </span>
           ) : undefined
         }

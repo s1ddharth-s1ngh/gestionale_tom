@@ -105,6 +105,40 @@ async function risolutoreCliente(): Promise<(c: Commessa) => CommessaConCliente>
   };
 }
 
+/**
+ * I filtri che NON dipendono dallo stato. Li applicano sia `list` sia
+ * `contaPerStato`, perché i contatori delle pill devono contare dentro la
+ * ricerca corrente: un contatore che ignora il filtro attivo mostra numeri che
+ * non c'entrano con quello che si vede sotto.
+ */
+function applicaFiltriNonStato(
+  righe: CommessaConCliente[],
+  filtri?: Omit<CommessaFiltri, 'stato' | 'pagina' | 'perPagina'>,
+): CommessaConCliente[] {
+  let out = righe;
+
+  if (filtri?.clienteId) out = out.filter((c) => c.clienteId === filtri.clienteId);
+
+  // Finestra sulla data pianificata: la usa il calendario per chiedere il mese.
+  // Le commesse senza data non appartengono a nessun mese e restano fuori.
+  if (filtri?.dal) out = out.filter((c) => !!c.dataPianificata && c.dataPianificata >= filtri.dal!);
+  if (filtri?.al) out = out.filter((c) => !!c.dataPianificata && c.dataPianificata <= filtri.al!);
+
+  if (filtri?.q) {
+    const q = filtri.q.trim().toLowerCase();
+    out = out.filter(
+      (c) =>
+        c.numero.toLowerCase().includes(q) ||
+        c.clienteDenominazione.toLowerCase().includes(q) ||
+        c.luogoEtichetta.toLowerCase().includes(q) ||
+        (c.note?.toLowerCase().includes(q) ?? false) ||
+        c.lavorazioni.some((l) => l.descrizione.toLowerCase().includes(q)),
+    );
+  }
+
+  return out;
+}
+
 function trova(id: string): Commessa {
   const c = commesse.find((x) => x.id === id);
   if (!c) throw new Error(`Commessa ${id} non trovata`);
@@ -125,27 +159,9 @@ export const commesseService = {
     // Il join col cliente sta PRIMA del filtro, o la ricerca per nome non
     // troverebbe niente: `q` cerca su un campo che prima del join non esiste.
     const conCliente = await risolutoreCliente();
-    let righe = commesse.map(conCliente);
+    let righe = applicaFiltriNonStato(commesse.map(conCliente), filtri);
 
     if (filtri?.stato) righe = righe.filter((c) => c.stato === filtri.stato);
-    if (filtri?.clienteId) righe = righe.filter((c) => c.clienteId === filtri.clienteId);
-
-    // Finestra sulla data pianificata: la usa il calendario per chiedere il mese.
-    // Le commesse senza data non appartengono a nessun mese e restano fuori.
-    if (filtri?.dal) righe = righe.filter((c) => !!c.dataPianificata && c.dataPianificata >= filtri.dal!);
-    if (filtri?.al) righe = righe.filter((c) => !!c.dataPianificata && c.dataPianificata <= filtri.al!);
-
-    if (filtri?.q) {
-      const q = filtri.q.trim().toLowerCase();
-      righe = righe.filter(
-        (c) =>
-          c.numero.toLowerCase().includes(q) ||
-          c.clienteDenominazione.toLowerCase().includes(q) ||
-          c.luogoEtichetta.toLowerCase().includes(q) ||
-          (c.note?.toLowerCase().includes(q) ?? false) ||
-          c.lavorazioni.some((l) => l.descrizione.toLowerCase().includes(q)),
-      );
-    }
 
     return impagina([...righe].sort(perDataPianificata), filtri as FiltriBase);
   },
@@ -308,10 +324,19 @@ export const commesseService = {
 
   /** Conteggi per le pill di filtro. Vengono dall'archivio intero, non dalla
    *  pagina corrente: un contatore che cambia cambiando pagina non è un contatore. */
-  async contaPerStato(): Promise<Record<StatoCommessa | 'tutte', number>> {
+  async contaPerStato(
+    filtri?: Omit<CommessaFiltri, 'stato' | 'pagina' | 'perPagina'>,
+  ): Promise<Record<StatoCommessa | 'tutte', number>> {
     await ritardo(150);
+    // I contatori contano DENTRO la ricerca corrente. Contare l'archivio intero
+    // farebbe dire alla pill «In corso 4» sopra una tabella che, cercando
+    // "Casalecchio", di commesse in corso ne mostra una: due numeri veri che
+    // insieme raccontano una bugia.
+    const conCliente = await risolutoreCliente();
+    const righe = applicaFiltriNonStato(commesse.map(conCliente), filtri);
+
     const conta = {
-      tutte: commesse.length,
+      tutte: righe.length,
       da_pianificare: 0,
       pianificata: 0,
       in_corso: 0,
@@ -319,7 +344,7 @@ export const commesseService = {
       sospesa: 0,
       annullata: 0,
     };
-    for (const c of commesse) conta[c.stato] += 1;
+    for (const c of righe) conta[c.stato] += 1;
     return conta;
   },
 
