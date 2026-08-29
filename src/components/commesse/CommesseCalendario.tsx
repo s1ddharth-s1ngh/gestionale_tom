@@ -1,153 +1,221 @@
-import { useMemo } from 'react';
-import { ChevronLeft, ChevronRight } from '@/components/ui/icons';
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { StatusPill } from '@/components/ui/status-pill';
-import { statoCommessaAccent, statoCommessaLabel, type Commessa } from '@/types/commessa';
+import { ChevronLeft, ChevronRight } from '@/components/ui/icons';
+import { Skeleton } from '@/components/ui/skeleton';
+import { STATUS_PILL_ACCENT } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
+import { formatOre } from '@/lib/formatters';
+import type { CommessaConCliente } from '@/types/commessa';
+import { statoCommessaAccent, statoCommessaLabel } from '@/types/commessa';
 
-interface CommesseCalendarioProps {
-  commesse: Commessa[];
-  /** Un giorno qualsiasi del mese mostrato. */
-  mese: Date;
-  onMeseChange: (mese: Date) => void;
-  /** Cosa scrivere dentro la cella: il chiamante conosce i clienti, il calendario no. */
-  etichetta: (commessa: Commessa) => string;
-  onApri: (id: string) => void;
-  className?: string;
+/**
+ * La griglia mensile delle commesse pianificate.
+ *
+ * Scritta a mano invece che presa da una libreria: servono tre informazioni per
+ * cella — numero, cliente e stato a colpo d'occhio — e ogni calendario pronto
+ * va combattuto per togliergli il suo stile prima di poterci mettere il nostro.
+ * Qui la cella è `bg-[#111111] border-white/[0.06]` come ogni altra superficie
+ * dell'app, e le commesse dentro usano gli stessi accent della colonna stato:
+ * chi ha imparato i colori nell'elenco li ritrova qui senza reimpararli.
+ */
+
+/** Lunedì primo: è la settimana lavorativa, e questo è un calendario di cantiere. */
+const GIORNI = ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom'];
+
+const MESI = [
+  'gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
+  'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre',
+];
+
+/**
+ * Oltre questo numero la cella smette di elencare e passa a «+N».
+ * Tre commesse riempiono già una cella di griglia mensile: la quarta la fa
+ * crescere e sfonda l'allineamento di tutta la riga.
+ */
+const MAX_PER_CELLA = 3;
+
+/** ISO `AAAA-MM-GG` di una data locale. `toISOString()` no: sposta di fuso. */
+export function isoLocale(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const gg = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${gg}`;
 }
 
-/** La settimana italiana parte da lunedì: `getDay()` mette la domenica a 0. */
-const GIORNI = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
-
-/** Oltre tre pill la cella si allunga e la griglia perde la forma di mese. */
-const MAX_PILL_PER_CELLA = 3;
-
-/** Chiave giorno in ora locale: `toISOString()` sposta indietro di un fuso e
- *  una commessa dell'1 finirebbe nel 31 del mese prima. */
-function chiaveGiorno(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+/** Il lunedì della settimana che contiene `d`. Domenica appartiene alla settimana che finisce. */
+function lunediDi(d: Date): Date {
+  const out = new Date(d);
+  const dow = (out.getDay() + 6) % 7; // 0 = lunedì
+  out.setDate(out.getDate() - dow);
+  out.setHours(12, 0, 0, 0);
+  return out;
 }
 
 /**
- * Griglia mensile con le commesse pianificate dentro le celle.
- *
- * Costruita con i token del design system invece che con una libreria di
- * calendario: servono tre informazioni per cella (giorno, stato, cliente) e
- * ogni calendario pronto va poi combattuto per togliergli il suo stile.
+ * Le 42 caselle della griglia: sei settimane sempre, anche quando il mese ne
+ * occupa cinque. Una griglia che cambia altezza a ogni cambio mese fa saltare
+ * tutto quello che le sta sotto.
  */
-export function CommesseCalendario({
-  commesse,
-  mese,
-  onMeseChange,
-  etichetta,
-  onApri,
-  className,
-}: CommesseCalendarioProps) {
-  const celle = useMemo(() => costruisciGriglia(mese), [mese]);
+export function caselleDelMese(anno: number, mese: number): Date[] {
+  const inizio = lunediDi(new Date(anno, mese, 1));
+  return Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(inizio);
+    d.setDate(inizio.getDate() + i);
+    d.setHours(12, 0, 0, 0);
+    return d;
+  });
+}
 
-  const perGiorno = useMemo(() => {
-    const mappa = new Map<string, Commessa[]>();
+/** Primo e ultimo giorno delle 42 caselle: è la finestra da chiedere al service. */
+export function finestraDelMese(anno: number, mese: number): { dal: string; al: string } {
+  const caselle = caselleDelMese(anno, mese);
+  return { dal: isoLocale(caselle[0]), al: isoLocale(caselle[41]) };
+}
+
+interface CommesseCalendarioProps {
+  anno: number;
+  mese: number;
+  onCambiaMese: (anno: number, mese: number) => void;
+  /** Solo le commesse con `dataPianificata` dentro la finestra del mese. */
+  commesse: CommessaConCliente[];
+  loading?: boolean;
+}
+
+export function CommesseCalendario({
+  anno,
+  mese,
+  onCambiaMese,
+  commesse,
+  loading,
+}: CommesseCalendarioProps) {
+  const navigate = useNavigate();
+  const oggi = isoLocale(new Date());
+
+  const caselle = React.useMemo(() => caselleDelMese(anno, mese), [anno, mese]);
+
+  // Un indice per data invece di un `.filter()` per cella: 42 filtri su tutte
+  // le commesse a ogni render è lavoro quadratico per una tabella che non ne
+  // ha bisogno.
+  const perGiorno = React.useMemo(() => {
+    const mappa = new Map<string, CommessaConCliente[]>();
     for (const c of commesse) {
       if (!c.dataPianificata) continue;
-      const chiave = c.dataPianificata.slice(0, 10);
-      const elenco = mappa.get(chiave);
-      if (elenco) elenco.push(c);
-      else mappa.set(chiave, [c]);
+      const lista = mappa.get(c.dataPianificata);
+      if (lista) lista.push(c);
+      else mappa.set(c.dataPianificata, [c]);
     }
     return mappa;
   }, [commesse]);
 
-  const oggi = chiaveGiorno(new Date());
-  const titolo = mese.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+  const vaiA = (delta: number) => {
+    const d = new Date(anno, mese + delta, 1);
+    onCambiaMese(d.getFullYear(), d.getMonth());
+  };
+
+  const tornaAOggi = () => {
+    const d = new Date();
+    onCambiaMese(d.getFullYear(), d.getMonth());
+  };
+
+  const meseCorrente = (() => {
+    const d = new Date();
+    return d.getFullYear() === anno && d.getMonth() === mese;
+  })();
 
   return (
-    <div className={cn('overflow-hidden rounded-[20px] border border-white/[0.06] bg-[#111111]', className)}>
-      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3">
-        <h2 className="text-base font-semibold capitalize text-white">{titolo}</h2>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => onMeseChange(new Date())}>
-            Oggi
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={() => vaiA(-1)} title="Mese precedente">
+            <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button
-            variant="secondary"
-            size="icon"
-            aria-label="Mese precedente"
-            onClick={() => onMeseChange(new Date(mese.getFullYear(), mese.getMonth() - 1, 1))}
-          >
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="secondary"
-            size="icon"
-            aria-label="Mese successivo"
-            onClick={() => onMeseChange(new Date(mese.getFullYear(), mese.getMonth() + 1, 1))}
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
+          <span className="min-w-[150px] text-center text-[13px] font-semibold capitalize text-white">
+            {MESI[mese]} {anno}
+          </span>
+          <Button variant="ghost" size="icon" onClick={() => vaiA(1)} title="Mese successivo">
+            <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
+        {/* Il bottone compare solo quando serve: su questo mese non ha nulla da fare. */}
+        {!meseCorrente && (
+          <Button variant="secondary" onClick={tornaAOggi}>
+            Oggi
+          </Button>
+        )}
       </div>
 
-      <div className="grid grid-cols-7 border-b border-white/[0.06]">
+      <div className="grid grid-cols-7 gap-px overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.06]">
         {GIORNI.map((g) => (
           <div
             key={g}
-            className="px-2 py-2 text-[10px] font-medium uppercase tracking-[0.04em] text-white/40"
+            className="bg-[#141414] py-2 text-center text-[10px] font-medium uppercase tracking-[0.04em] text-white/40"
           >
             {g}
           </div>
         ))}
-      </div>
 
-      <div className="grid grid-cols-7">
-        {celle.map((giorno) => {
-          const chiave = chiaveGiorno(giorno);
-          const delMese = giorno.getMonth() === mese.getMonth();
-          const pianificate = perGiorno.get(chiave) ?? [];
-          const nascoste = pianificate.length - MAX_PILL_PER_CELLA;
+        {caselle.map((giorno) => {
+          const iso = isoLocale(giorno);
+          const fuoriMese = giorno.getMonth() !== mese;
+          const eOggi = iso === oggi;
+          const delGiorno = perGiorno.get(iso) ?? [];
 
           return (
             <div
-              key={chiave}
+              key={iso}
               className={cn(
-                'min-h-[104px] space-y-1 border-b border-r border-white/[0.06] p-1.5',
+                'min-h-[104px] bg-[#111111] p-1.5',
                 // I giorni degli altri mesi restano visibili ma spenti: toglierli
-                // lascerebbe buchi nella griglia e si perde il senso della settimana.
-                !delMese && 'bg-white/[0.015]',
+                // lascerebbe buchi nella griglia, e una griglia bucata si legge
+                // come un errore di rendering.
+                fuoriMese && 'bg-[#0d0d0d]',
               )}
             >
-              <div
-                className={cn(
-                  'inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] tabular-nums',
-                  chiave === oggi
-                    ? 'bg-[#1E6FFF] font-semibold text-white'
-                    : delMese
-                      ? 'text-white/70'
-                      : 'text-white/25',
+              <div className="mb-1 flex items-center justify-between px-0.5">
+                <span
+                  className={cn(
+                    'text-[11px] tabular-nums',
+                    fuoriMese ? 'text-white/20' : 'text-white/45',
+                    eOggi &&
+                      'flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#1E6FFF] font-semibold text-white',
+                  )}
+                >
+                  {giorno.getDate()}
+                </span>
+                {delGiorno.length > 0 && !loading && (
+                  <span className="text-[10px] tabular-nums text-white/30">
+                    {formatOre(delGiorno.reduce((t, c) => t + c.orePreviste, 0))}
+                  </span>
                 )}
-              >
-                {giorno.getDate()}
               </div>
 
-              {pianificate.slice(0, MAX_PILL_PER_CELLA).map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => onApri(c.id)}
-                  title={`${c.numero} · ${statoCommessaLabel(c.stato)}`}
-                  className="block w-full text-left transition-opacity hover:opacity-80"
-                >
-                  <StatusPill
-                    accent={statoCommessaAccent(c.stato)}
-                    variant="dot"
-                    className="w-full justify-start"
-                  >
-                    <span className="truncate">{etichetta(c)}</span>
-                  </StatusPill>
-                </button>
-              ))}
-
-              {nascoste > 0 && (
-                <p className="pl-1 text-[10px] tabular-nums text-white/35">+{nascoste} altre</p>
+              {loading ? (
+                <Skeleton className="h-5 rounded-md" />
+              ) : (
+                <div className="space-y-1">
+                  {delGiorno.slice(0, MAX_PER_CELLA).map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => navigate(`/commesse/${c.id}`)}
+                      // Il titolo nativo porta quello che nella cella non ci sta:
+                      // in una griglia mensile lo spazio per il nome intero del
+                      // cliente non esiste, e troncarlo senza rimedio lo perde.
+                      title={`${c.numero} · ${c.clienteDenominazione} · ${statoCommessaLabel(c.stato)}`}
+                      className={cn(
+                        'block w-full truncate rounded-md border px-1.5 py-1 text-left text-[10.5px] font-medium transition-opacity hover:opacity-80',
+                        STATUS_PILL_ACCENT[statoCommessaAccent(c.stato)],
+                      )}
+                    >
+                      {c.clienteDenominazione}
+                    </button>
+                  ))}
+                  {delGiorno.length > MAX_PER_CELLA && (
+                    <span className="block px-1.5 text-[10px] text-white/35">
+                      +{delGiorno.length - MAX_PER_CELLA} altre
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           );
@@ -155,19 +223,4 @@ export function CommesseCalendario({
       </div>
     </div>
   );
-}
-
-/** Sempre 6 righe da 7 giorni: a righe variabili la griglia salta di altezza
- *  cambiando mese, e il click su «successivo» sposta il bottone sotto il dito. */
-function costruisciGriglia(mese: Date): Date[] {
-  const primo = new Date(mese.getFullYear(), mese.getMonth(), 1);
-  const offsetLunedi = (primo.getDay() + 6) % 7;
-  const partenza = new Date(primo);
-  partenza.setDate(primo.getDate() - offsetLunedi);
-
-  return Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(partenza);
-    d.setDate(partenza.getDate() + i);
-    return d;
-  });
 }

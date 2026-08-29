@@ -55,12 +55,33 @@ export default function CommesseList() {
     setPagina(1);
   }, [stato, ricercaApplicata]);
 
+  const [meseVisibile, setMeseVisibile] = React.useState(() => {
+    const d = new Date();
+    return { anno: d.getFullYear(), mese: d.getMonth() };
+  });
+
   const filtri: CommessaFiltri = {
     stato: stato === 'tutte' ? undefined : stato,
     q: ricercaApplicata || undefined,
     pagina,
     perPagina: PER_PAGINA,
   };
+
+  /**
+   * Il calendario ha la sua query, non riusa quella dell'elenco: gli servono le
+   * commesse del mese intero e non le venti della pagina corrente, e chiedere
+   * una finestra di date è esattamente la forma che avrà con un backend vero.
+   * Il `perPagina` alto è il modo di dire "tutte quelle del mese" con la firma
+   * che c'è: un mese di cantiere non arriva a duecento commesse.
+   */
+  const finestra = finestraDelMese(meseVisibile.anno, meseVisibile.mese);
+  const elencoCalendario = useCommesse({
+    stato: stato === 'tutte' ? undefined : stato,
+    q: ricercaApplicata || undefined,
+    dal: finestra.dal,
+    al: finestra.al,
+    perPagina: 200,
+  });
 
   const elenco = useCommesse(filtri);
   const conteggi = useConteggiCommesse();
@@ -131,10 +152,12 @@ export default function CommesseList() {
               />
             </>
           ) : (
-            <TableEmptyState
-              icon={Calendar}
-              title="Il calendario arriva col prossimo commit"
-              description="La griglia mensile con le commesse pianificate nelle celle."
+            <CommesseCalendario
+              anno={meseVisibile.anno}
+              mese={meseVisibile.mese}
+              onCambiaMese={(anno, mese) => setMeseVisibile({ anno, mese })}
+              commesse={elencoCalendario.data?.righe ?? []}
+              loading={elencoCalendario.isLoading}
             />
           )}
         </div>
