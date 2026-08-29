@@ -188,6 +188,25 @@ export const fattureService = {
       .sort((a, b) => (a.dataScadenza ?? '9999').localeCompare(b.dataScadenza ?? '9999'));
   },
 
+  /**
+   * Conteggi per le pill di filtro. Vengono dall'archivio intero, non dalla
+   * pagina corrente: un contatore che cambia cambiando pagina non è un contatore.
+   */
+  async contaPerStato(): Promise<Record<StatoFattura | 'tutte', number>> {
+    await ritardo(150);
+    const oggi = new Date();
+    const conta = {
+      tutte: fatture.length,
+      bozza: 0,
+      emessa: 0,
+      pagata_parziale: 0,
+      pagata: 0,
+      scaduta: 0,
+    };
+    for (const f of fatture) conta[calcolaStatoFattura(f, oggi)] += 1;
+    return conta;
+  },
+
   async create(input: FatturaInput): Promise<Fattura> {
     await ritardo(400);
     const adesso = new Date().toISOString();

@@ -16,6 +16,7 @@ export const fattureKeys = {
   detail: (id: string) => [...fattureKeys.all, 'detail', id] as const,
   perCliente: (clienteId: string) => [...fattureKeys.all, 'cliente', clienteId] as const,
   scadenzario: () => [...fattureKeys.all, 'scadenzario'] as const,
+  conteggi: () => [...fattureKeys.all, 'conteggi'] as const,
 };
 
 export function useFatture(filtri?: FatturaFiltri) {
@@ -39,6 +40,14 @@ export function useFatturePerCliente(clienteId: string | undefined) {
     queryKey: fattureKeys.perCliente(clienteId ?? ''),
     queryFn: () => fattureService.listPerCliente(clienteId!),
     enabled: !!clienteId,
+  });
+}
+
+/** I contatori delle pill: dall'archivio intero, non dalla pagina mostrata. */
+export function useConteggiFatture() {
+  return useQuery({
+    queryKey: fattureKeys.conteggi(),
+    queryFn: () => fattureService.contaPerStato(),
   });
 }
 
