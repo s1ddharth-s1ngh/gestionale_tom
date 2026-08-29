@@ -37,6 +37,13 @@ interface DarkTableProps extends React.HTMLAttributes<HTMLDivElement> {
   emptyDescription?: React.ReactNode;
   emptyIcon?: LucideIcon;
   emptyAction?: React.ReactNode;
+  /**
+   * Stato vuoto più basso. Serve alle tabelle annidate in una card — i
+   * pagamenti dentro la scheda di una fattura, le righe dentro un preventivo —
+   * dove i 260px del vuoto standard aprirebbero una voragine in mezzo alla
+   * pagina.
+   */
+  compact?: boolean;
   /** Altezza massima con scroll-y interno, es. "60vh". */
   maxHeight?: string;
   /**
@@ -63,6 +70,7 @@ export function DarkTable({
   emptyAction,
   maxHeight,
   fillContainer,
+  compact,
   className,
   tableClassName,
   ...rest
@@ -93,6 +101,7 @@ export function DarkTable({
           title={emptyMessage}
           description={emptyDescription}
           action={emptyAction}
+          compact={compact}
           className={fillContainer ? 'flex-1' : undefined}
         />
       </div>
