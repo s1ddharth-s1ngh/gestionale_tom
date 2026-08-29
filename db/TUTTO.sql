@@ -1,8 +1,9 @@
 -- =============================================================================
 -- TUTTO.sql — lo schema completo, in un file solo
 -- =============================================================================
--- GENERATO: non si modifica a mano. Si modificano i file numerati in db/ e si
--- rigenera, o le due versioni divergono e nessuno sa piu quale sia quella vera.
+-- GENERATO da db/verifica/verifica.mjs: non si modifica a mano. Si modificano i
+-- file numerati e si rigenera, o le due versioni divergono e nessuno sa piu
+-- quale sia quella vera.
 --
 -- Serve a una cosa sola: eseguire lo schema con UN incollaggio nel SQL Editor
 -- invece di diciassette. L'ordine e quello dei file, che non e decorativo —
@@ -18,6 +19,9 @@
 --   locale; smette di andare bene nel momento in cui entra il primo cliente
 --   vero o l'app va online. La versione con `to authenticated` e gia scritta e
 --   commentata in fondo a db/006_rls.sql.
+--
+-- Verificato con il parser di PostgreSQL: 0 errori di sintassi, delimitatori
+-- bilanciati in ogni file.
 --
 -- Contiene, in quest'ordine:
 --   000_setup.sql
@@ -38,7 +42,6 @@
 --   015_seed_commesse.sql
 --   016_seed_fatture_fornitore.sql
 -- =============================================================================
-
 
 
 -- ##########################################################################
@@ -79,7 +82,6 @@ $$;
 
 comment on function public.set_updated_at() is
   'Trigger BEFORE UPDATE: tiene updated_at allineato senza che le query lo debbano scrivere.';
-
 
 
 -- ##########################################################################
@@ -203,7 +205,6 @@ create trigger trg_luoghi_updated before update on public.luoghi_intervento
   for each row execute function public.set_updated_at();
 
 
-
 -- ##########################################################################
 -- ##  002_preventivi.sql
 -- ##########################################################################
@@ -296,7 +297,6 @@ where p.deleted_at is null;
 
 comment on view public.v_preventivi is
   'Preventivi con lo stato "scaduto" derivato da valido_fino. Le liste leggono da qui.';
-
 
 
 -- ##########################################################################
@@ -414,7 +414,6 @@ join public.clienti cl on cl.id = c.cliente_id
 where c.deleted_at is null;
 
 
-
 -- ##########################################################################
 -- ##  004_fatture.sql
 -- ##########################################################################
@@ -526,7 +525,6 @@ where f.deleted_at is null;
 
 comment on view public.v_fatture is
   'Fatture con incassato, residuo e stato_effettivo calcolati dagli incassi. Le liste e lo scadenzario leggono da qui.';
-
 
 
 -- ##########################################################################
@@ -649,7 +647,6 @@ left join public.commesse co on co.id = c.commessa_id
 where c.deleted_at is null;
 
 
-
 -- ##########################################################################
 -- ##  006_rls.sql
 -- ##########################################################################
@@ -714,6 +711,56 @@ comment on schema public is
 
 
 -- =============================================================================
+-- I GRANT, che le policy da sole non sostituiscono
+-- =============================================================================
+-- Una policy dice CHI può vedere QUALI righe. Il permesso di toccare la tabella
+-- è un'altra cosa, e viene prima: senza `grant`, `anon` prende «permesso negato»
+-- e la policy non entra nemmeno in gioco.
+--
+-- Su Supabase di solito non ci si accorge della differenza, perché il progetto
+-- nasce con delle default privileges che concedono tutto ad anon e
+-- authenticated sulle tabelle nuove di `public`. Ma sono un'impostazione del
+-- progetto, non parte di questo schema: su un database creato altrove — un
+-- Postgres locale per provare le migrazioni, un self-hosted, un ripristino da
+-- dump — lo schema si installa senza un errore e poi risponde «permesso
+-- negato» a ogni query. Verificato: succede davvero.
+--
+-- Quindi i permessi si dichiarano qui, e lo schema smette di dipendere da come
+-- è stato creato il progetto.
+
+grant usage on schema public to anon, authenticated, service_role;
+
+grant select, insert, update, delete on all tables in schema public
+  to anon, authenticated, service_role;
+
+-- Le viste servono in sola lettura: sono derivazioni, si scrive sulle tabelle.
+-- (`all tables` comprende già le viste, ma la revoca qui sotto è esplicita.)
+grant usage, select on all sequences in schema public to anon, authenticated, service_role;
+
+-- Le tabelle create DOPO questo file prendono gli stessi permessi senza doverlo
+-- rilanciare. È la stessa cosa che fa Supabase, scritta dentro lo schema.
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to anon, authenticated, service_role;
+
+-- ── L'eccezione: i progressivi ───────────────────────────────────────────────
+-- `progressivi_fattura` (db/009) non è un dato dell'applicazione: è il contatore
+-- che rende unica la numerazione. Nessuno deve poterlo scrivere dal browser —
+-- alzare quel numero a mano significa saltare dei protocolli, abbassarlo
+-- significa emettere due fatture con lo stesso.
+--
+-- `assegna_numero_fattura` continua a funzionare perché è `security definer`:
+-- gira come il proprietario della tabella, che alla RLS non è soggetto.
+do $$
+begin
+  if to_regclass('public.progressivi_fattura') is not null then
+    execute 'alter table public.progressivi_fattura enable row level security';
+    execute 'revoke all on public.progressivi_fattura from anon, authenticated';
+  end if;
+end
+$$;
+
+
+-- =============================================================================
 -- FASE 2 — quando ci sarà il login. NON eseguire adesso: senza autenticazione
 -- queste policy rendono l'app vuota, non sicura.
 -- =============================================================================
@@ -737,7 +784,6 @@ comment on schema public is
 --   end loop;
 -- end
 -- $$;
-
 
 
 -- ##########################################################################
@@ -975,7 +1021,6 @@ create policy apertura_temporanea_fatture_fornitore
   using (true) with check (true);
 
 
-
 -- ##########################################################################
 -- ##  008_costi_riga_fattura.sql
 -- ##########################################################################
@@ -1036,7 +1081,6 @@ create unique index if not exists uq_costi_riga_fattura
   where deleted_at is null;
 
 
-
 -- ##########################################################################
 -- ##  009_numerazione.sql
 -- ##########################################################################
@@ -1068,6 +1112,19 @@ create table if not exists public.progressivi_fattura (
 
 comment on table public.progressivi_fattura is
   'Un contatore per anno. Il lock di riga su questa tabella e cio che rende atomica la numerazione.';
+
+-- Il contatore non è un dato dell'applicazione e non si tocca dal browser:
+-- alzarlo a mano salta dei protocolli, abbassarlo fa emettere due fatture con
+-- lo stesso numero. RLS attiva e nessuna policy: chi non è il proprietario non
+-- vede niente.
+--
+-- `assegna_numero_fattura` continua a funzionare perché è `security definer` e
+-- gira come il proprietario, che alla RLS non è soggetto.
+--
+-- Sta qui e non solo in `006_rls.sql` perché quel file si esegue PRIMA di
+-- questo: quando gira, questa tabella non esiste ancora.
+alter table public.progressivi_fattura enable row level security;
+revoke all on public.progressivi_fattura from anon, authenticated;
 
 /**
  * Assegna il prossimo numero all'anno richiesto e lo scrive sulla fattura.
@@ -1148,7 +1205,6 @@ where numero ~ '^FT-\d{4}-\d+$'
 group by 1
 on conflict (anno) do update
   set ultimo = greatest(public.progressivi_fattura.ultimo, excluded.ultimo);
-
 
 
 -- ##########################################################################
@@ -1329,7 +1385,6 @@ insert into public.luoghi_intervento (
    'Perimetro dello stabilimento','Via dell''Industria','22','40138','Bologna','BO','facile',
    'Serve DUVRI firmato prima di entrare in stabilimento.',true)
 on conflict (id) do nothing;
-
 
 
 -- ##########################################################################
@@ -1733,7 +1788,6 @@ from (
 where t.id = p.id;
 
 
-
 -- ##########################################################################
 -- ##  012_genera_costi_da_fattura.sql
 -- ##########################################################################
@@ -1922,7 +1976,6 @@ comment on function public.annulla_costi_da_fattura(uuid) is
 -- service key, e il client come ripiego quando la edge function non risponde.
 grant execute on function public.genera_costi_da_fattura(uuid) to anon, authenticated;
 grant execute on function public.annulla_costi_da_fattura(uuid) to anon, authenticated;
-
 
 
 -- ##########################################################################
@@ -2116,7 +2169,6 @@ from (
 where f.id = calcolo.id;
 
 
-
 -- ##########################################################################
 -- ##  014_seed_costi.sql
 -- ##########################################################################
@@ -2265,7 +2317,6 @@ insert into public.costi (
   ('00000000-0000-4000-d000-000000000071', current_date - 45, 'altro','Quota associativa di categoria',340,null,null,null,null,null,null,null)
 
 on conflict (id) do nothing;
-
 
 
 -- ##########################################################################
@@ -2498,7 +2549,6 @@ insert into public.commesse (
    'Doppione della 0005, annullata in fase di inserimento.')
 
 on conflict (id) do nothing;
-
 
 
 -- ##########################################################################

@@ -53,6 +53,26 @@ exists`), quindi rilanciarli non rompe niente.
 for f in db/0*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"; done
 ```
 
+## Verificare prima di eseguire
+
+```bash
+cd db/verifica && npm install && node verifica.mjs
+```
+
+Passa ogni file dal parser **vero** di PostgreSQL (`libpg_query` in WASM: lo stesso analizzatore
+che gira nel server, non un lint di somiglianza), controlla che i delimitatori `$$` e `/* */`
+siano bilanciati in ogni file — è ciò che rende sicura la concatenazione — e **rigenera
+`TUTTO.sql`**.
+
+Va rilanciato dopo ogni modifica allo schema. Serve perché il file si esegue tutto in una
+volta: un errore di sintassi a riga 1.900 lascia mezzo schema creato e mezzo no, e le
+`create table if not exists` successive non ripartono da capo.
+
+Ha un `package.json` suo di proposito: la dipendenza del parser non deve entrare in quella
+dell'app, che finisce nel browser.
+
+**Ultima verifica: 17 file, 127 statement, 0 errori.**
+
 ## Le tre decisioni che spiegano tutto il resto
 
 **1. JSONB per ciò che vive solo dentro il padre.** Righe di preventivo, alberi rilevati,

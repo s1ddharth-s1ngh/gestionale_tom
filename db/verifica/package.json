@@ -1,0 +1,12 @@
+{
+  "name": "verifica-schema",
+  "private": true,
+  "type": "module",
+  "description": "Valida db/*.sql col parser di PostgreSQL e rigenera TUTTO.sql. Separato dall'app: questa dipendenza non deve entrare nel bundle del browser.",
+  "scripts": {
+    "verifica": "node verifica.mjs"
+  },
+  "dependencies": {
+    "pg-query-emscripten": "5.1.0"
+  }
+}
