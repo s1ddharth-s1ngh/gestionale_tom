@@ -1,277 +1,304 @@
-import { preventiviMock } from '@/mocks/preventivi';
+import { supabase } from '@/lib/supabase';
 import { commesseService } from '@/services/commesseService';
-import type { FiltriBase, Paginato } from '@/types/comune';
-import { impagina, ritardo } from '@/types/comune';
+import { PER_PAGINA_DEFAULT, type Paginato } from '@/types/comune';
 import type {
   Preventivo,
   PreventivoFiltri,
   PreventivoInput,
-  RigaPreventivo,
-  SchedaSopralluogo,
   StatoPreventivo,
 } from '@/types/preventivo';
-import { STATI_PREVENTIVO, calcolaImporto, calcolaTotali, statoEffettivo } from '@/types/preventivo';
+import { STATI_PREVENTIVO, calcolaTotali } from '@/types/preventivo';
+import {
+  preventivoDaRiga,
+  rigaDaPreventivo,
+  type RigaPreventivoDb,
+} from './preventiviMapper';
 
 /**
- * L'unico punto che tocca i dati dei preventivi.
+ * Accesso ai dati dei preventivi — su Supabase.
  *
- * Oggi legge un array in memoria, domani una `fetch`: le firme sono già quelle
- * che avranno con un backend vero — filtri e paginazione sono parametri, non
- * lavoro che si fa nel componente. Per questo `list()` torna un `Paginato` e
- * non un array: il giorno del backend la pagina non cambia di una riga.
+ * Le firme non sono cambiate rispetto alla versione sui mock: è cambiato solo
+ * il corpo, e nessun hook, nessuna pagina e nessun componente è stato toccato.
+ * Era lo scopo di tenere il layer separato (CONVENTIONS §4).
  *
- * Le modifiche vivono nella sessione e si perdono al reload. È voluto: si vede
- * l'effetto delle proprie azioni navigando, e si riparte puliti ricaricando.
- */
-
-/** Copia mutabile: il mock resta il punto di partenza a ogni ricarica di pagina. */
-let preventivi: Preventivo[] = preventiviMock.map((p) => ({ ...p }));
-
-function oggi(): string {
-  const d = new Date();
-  d.setHours(12, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
-}
-
-function adesso(): string {
-  return new Date().toISOString();
-}
-
-/**
- * Riporta importi e totali in accordo con le righe.
+ * **Si legge dalla vista, si scrive sulla tabella.** `v_preventivi` calcola
+ * `stato_effettivo` da `valido_fino` e porta già la denominazione del cliente;
+ * una vista con una join però non è aggiornabile, quindi ogni insert e ogni
+ * update vanno su `preventivi`.
  *
- * Passa di qui OGNI scrittura, senza eccezioni: è l'unico motivo per cui
- * `imponibile` e `totale` si possono leggere senza ricalcolarli, e basta una
- * scrittura che salta il ricalcolo perché tornino a mentire.
+ * Le regole del primo service migrato (`clientiService`) valgono tutte:
+ * errori sempre lanciati, soft-delete mai DELETE, conteggio dalla stessa query,
+ * filtri e paginazione fatti dal database.
  */
-function ricalcola(p: Preventivo): Preventivo {
-  const righe = p.righe.map((r) => ({ ...r, importo: calcolaImporto(r) }));
-  const { imponibile, totale } = calcolaTotali(righe, p.aliquotaIva);
-  return { ...p, righe, imponibile, totale, aggiornatoIl: adesso() };
+
+/** La vista: letture. Ha `stato_effettivo` e `cliente_denominazione`. */
+const VISTA = 'v_preventivi';
+/** La tabella: scritture. */
+const TABELLA = 'preventivi';
+
+function esplodi(contesto: string, error: { message: string } | null): void {
+  // PostgREST non solleva eccezioni: torna `{ data, error }`. Un `error`
+  // ignorato diventa una lista vuota — cioè un bug che sembra «non ci sono
+  // dati», ed è il modo più efficace per perdere mezza giornata.
+  if (error) throw new Error(`${contesto}: ${error.message}`);
 }
 
-/** Progressivo annuale: `PR-2026-0031`. Il massimo dell'anno più uno, non il
- *  conteggio delle righe — cancellarne uno non deve riassegnare un numero già usato. */
-function prossimoNumero(): string {
-  const anno = new Date().getFullYear();
-  const prefisso = `PR-${anno}-`;
-  const ultimo = preventivi
-    .filter((p) => p.numero.startsWith(prefisso))
-    .map((p) => Number(p.numero.slice(prefisso.length)))
-    .filter((n) => Number.isFinite(n))
-    .reduce((max, n) => Math.max(max, n), 0);
-  return `${prefisso}${String(ultimo + 1).padStart(4, '0')}`;
-}
-
-/** Id locali: con un backend li genera il database, e questa funzione sparisce. */
-let contatoreId = preventivi.length;
-function nuovoId(prefisso: string): string {
-  contatoreId += 1;
-  return `${prefisso}-${String(contatoreId).padStart(3, '0')}-${Math.random().toString(36).slice(2, 6)}`;
-}
+/** Le virgole e le parentesi spezzerebbero la sintassi di `or()`. */
+const perOr = (t: string) => t.replace(/[,()]/g, ' ');
 
 /**
- * Ordinamento di default: il più recente in cima. Su un preventivo si lavora nei
- * giorni subito dopo averlo scritto, e quello che serve è sempre in alto.
- * A parità di data decide il numero, o l'ordine balla a ogni ricarica.
+ * Applica a una query i filtri che NON dipendono dallo stato.
+ *
+ * Li condividono `list` e `contaPerStato`: i contatori delle pill devono
+ * contare dentro la ricerca corrente, o mostrerebbero numeri che non c'entrano
+ * con quello che si sta guardando.
+ *
+ * La ricerca copre anche `cliente_denominazione`, che la vista porta già: è la
+ * chiusura del TODO che la versione sui mock aveva lasciato, dove il nome del
+ * cliente si risolveva in pagina e quindi non era cercabile.
  */
-function perDataEmissione(a: Preventivo, b: Preventivo): number {
-  if (a.dataEmissione === b.dataEmissione) return b.numero.localeCompare(a.numero);
-  return b.dataEmissione.localeCompare(a.dataEmissione);
-}
+function filtriBase<T extends { eq: unknown; or: unknown }>(q: T, filtri?: PreventivoFiltri): T {
+  type Q = {
+    eq: (c: string, v: unknown) => Q;
+    or: (f: string) => Q;
+  };
+  let out = q as unknown as Q;
 
-function trova(id: string): Preventivo {
-  const p = preventivi.find((x) => x.id === id);
-  if (!p) throw new Error(`Preventivo ${id} non trovato`);
-  return p;
-}
+  if (filtri?.clienteId) out = out.eq('cliente_id', filtri.clienteId);
 
-/** Sostituisce il preventivo in elenco ricalcolando i derivati, e lo restituisce. */
-function scrivi(id: string, patch: Partial<Preventivo>): Preventivo {
-  const aggiornato = ricalcola({ ...trova(id), ...patch });
-  preventivi = preventivi.map((p) => (p.id === id ? aggiornato : p));
-  return aggiornato;
-}
-
-/** Le righe in ingresso non hanno id né importo: glieli dà il service. */
-function componiRighe(righe: PreventivoInput['righe']): RigaPreventivo[] {
-  return righe.map((r) => ({
-    ...r,
-    id: (r as Partial<RigaPreventivo>).id ?? nuovoId('rp'),
-    importo: calcolaImporto(r),
-  }));
-}
-
-/** Gli alberi del rilievo, stessa storia delle righe. */
-function componiSopralluogo(s: SchedaSopralluogo): SchedaSopralluogo {
-  return { ...s, alberi: s.alberi.map((a) => ({ ...a, id: a.id || nuovoId('ra') })) };
-}
-
-/**
- * I filtri che NON dipendono dallo stato. Li applica sia `list` sia
- * `contaPerStato`: i contatori delle pill devono contare dentro la ricerca
- * corrente, o mostrerebbero numeri che non c'entrano con quello che si vede.
- */
-function applicaFiltriBase(righe: Preventivo[], filtri?: PreventivoFiltri): Preventivo[] {
-  let out = righe;
-  if (filtri?.clienteId) out = out.filter((p) => p.clienteId === filtri.clienteId);
-  if (filtri?.q) {
-    const q = filtri.q.trim().toLowerCase();
-    // TODO(chat A): quando esiste `clientiService`, la ricerca copre anche la
-    // denominazione del cliente e l'etichetta del luogo. Il join va fatto qui e
-    // non nella pagina: con un backend vero diventa una condizione della query.
-    out = out.filter(
-      (p) =>
-        p.numero.toLowerCase().includes(q) ||
-        (p.note?.toLowerCase().includes(q) ?? false) ||
-        p.righe.some((r) => r.descrizione.toLowerCase().includes(q)) ||
-        p.sopralluogo.alberi.some((a) => a.specie.toLowerCase().includes(q)),
+  const termine = filtri?.q?.trim();
+  if (termine) {
+    const t = perOr(termine);
+    out = out.or(
+      [`numero.ilike.%${t}%`, `note.ilike.%${t}%`, `cliente_denominazione.ilike.%${t}%`].join(','),
     );
   }
-  return out;
+
+  return out as unknown as T;
+}
+
+/**
+ * Progressivo annuale: `PR-2026-0031`.
+ *
+ * Il massimo dell'anno più uno, chiesto al database e non contato sulle righe:
+ * cancellarne uno non deve riassegnare un numero già usato, e con il soft-delete
+ * i cancellati continuano a esistere. Per questo la query NON filtra
+ * `deleted_at`: un numero bruciato resta bruciato.
+ *
+ * Restano due utenti su un gestionale interno, quindi la corsa fra due
+ * creazioni simultanee è teorica; se un giorno smette di esserlo, la risposta è
+ * una sequence in Postgres, non un lock qui.
+ */
+async function prossimoNumero(): Promise<string> {
+  const anno = new Date().getFullYear();
+  const prefisso = `PR-${anno}-`;
+
+  const { data, error } = await supabase
+    .from(TABELLA)
+    .select('numero')
+    .like('numero', `${prefisso}%`)
+    .order('numero', { ascending: false })
+    .limit(1);
+  esplodi('Lettura ultimo numero', error);
+
+  const ultimo = data?.[0]?.numero as string | undefined;
+  const progressivo = ultimo ? Number(ultimo.slice(prefisso.length)) : 0;
+  const prossimo = Number.isFinite(progressivo) ? progressivo + 1 : 1;
+  return `${prefisso}${String(prossimo).padStart(4, '0')}`;
+}
+
+/** Rilegge il preventivo dalla vista dopo una scrittura, per tornare i derivati. */
+async function rileggi(id: string, contesto: string): Promise<Preventivo> {
+  const { data, error } = await supabase.from(VISTA).select('*').eq('id', id).single();
+  esplodi(contesto, error);
+  return preventivoDaRiga(data as RigaPreventivoDb);
+}
+
+/** Aggiorna la tabella e restituisce il record riletto dalla vista. */
+async function scrivi(
+  id: string,
+  patch: Record<string, unknown>,
+  contesto: string,
+): Promise<Preventivo> {
+  const { error } = await supabase.from(TABELLA).update(patch).eq('id', id);
+  esplodi(contesto, error);
+  return rileggi(id, contesto);
 }
 
 export const preventiviService = {
   async list(filtri?: PreventivoFiltri): Promise<Paginato<Preventivo>> {
-    await ritardo();
+    const perPagina = filtri?.perPagina ?? PER_PAGINA_DEFAULT;
+    const pagina = Math.max(1, filtri?.pagina ?? 1);
+    const da = (pagina - 1) * perPagina;
 
-    let righe = applicaFiltriBase(preventivi, filtri);
+    let q = filtriBase(
+      supabase.from(VISTA).select('*', { count: 'exact' }),
+      filtri,
+    );
 
-    // Il confronto è sullo stato EFFETTIVO e non su `p.stato`: `scaduto` non
-    // esiste fra i valori salvati, quindi filtrare sul campo grezzo darebbe
-    // sempre zero risultati sulla pill «Scaduti» e lascerebbe gli scaduti
-    // mescolati agli inviati.
-    if (filtri?.stato) {
-      const g = oggi();
-      righe = righe.filter((p) => statoEffettivo(p, g) === filtri.stato);
-    }
+    // Il filtro è su `stato_effettivo` e non su `stato`: «scaduto» non esiste
+    // fra i valori salvati, quindi filtrare la colonna grezza darebbe sempre
+    // zero risultati sulla pill «Scaduti» e lascerebbe gli scaduti mescolati
+    // agli inviati.
+    if (filtri?.stato) q = q.eq('stato_effettivo', filtri.stato);
 
-    return impagina([...righe].sort(perDataEmissione), filtri as FiltriBase);
+    const { data, error, count } = await q
+      .order('data_emissione', { ascending: false })
+      .order('numero', { ascending: false })
+      .range(da, da + perPagina - 1);
+    esplodi('Lettura preventivi', error);
+
+    return {
+      righe: ((data ?? []) as unknown as RigaPreventivoDb[]).map(preventivoDaRiga),
+      totale: count ?? 0,
+      pagina,
+      perPagina,
+    };
   },
 
   async getById(id: string): Promise<Preventivo | null> {
-    await ritardo(200);
-    return preventivi.find((p) => p.id === id) ?? null;
+    const { data, error } = await supabase.from(VISTA).select('*').eq('id', id).maybeSingle();
+    esplodi('Lettura preventivo', error);
+    return data ? preventivoDaRiga(data as RigaPreventivoDb) : null;
   },
 
   /** I preventivi di un cliente, per la sezione dedicata nella sua scheda. */
   async listPerCliente(clienteId: string): Promise<Preventivo[]> {
-    await ritardo(200);
-    return preventivi.filter((p) => p.clienteId === clienteId).sort(perDataEmissione);
+    const { data, error } = await supabase
+      .from(VISTA)
+      .select('*')
+      .eq('cliente_id', clienteId)
+      .order('data_emissione', { ascending: false });
+    esplodi('Lettura preventivi del cliente', error);
+    return ((data ?? []) as unknown as RigaPreventivoDb[]).map(preventivoDaRiga);
   },
 
   /**
    * Quanti preventivi per stato, dentro la ricerca corrente.
    *
-   * Sta nel service e non nella pagina perché con un backend vero è una query
-   * di aggregazione: contarli in pagina vorrebbe dire scaricare tutto l'archivio
-   * per mettere un numero dentro una pillola.
+   * Cinque `count` in parallelo e non una GROUP BY: PostgREST non espone i
+   * raggruppamenti, e le alternative sarebbero una funzione RPC — cioè una
+   * migrazione in più per cinque numeri — oppure scaricare l'archivio intero
+   * per contarlo qui, che è esattamente ciò che il filtro nel database evita.
+   * Le query sono `head: true`: tornano il conteggio, non le righe.
    */
   async contaPerStato(
     filtri?: Omit<PreventivoFiltri, 'stato' | 'pagina' | 'perPagina'>,
   ): Promise<Record<StatoPreventivo, number>> {
-    await ritardo(150);
-    const g = oggi();
-    const righe = applicaFiltriBase(preventivi, filtri);
-    const conta = Object.fromEntries(STATI_PREVENTIVO.map((s) => [s, 0])) as Record<
-      StatoPreventivo,
-      number
-    >;
-    for (const p of righe) conta[statoEffettivo(p, g)] += 1;
-    return conta;
+    const risultati = await Promise.all(
+      STATI_PREVENTIVO.map(async (stato) => {
+        const q = filtriBase(
+          supabase.from(VISTA).select('id', { count: 'exact', head: true }),
+          filtri,
+        ).eq('stato_effettivo', stato);
+        const { count, error } = await q;
+        esplodi(`Conteggio preventivi ${stato}`, error);
+        return [stato, count ?? 0] as const;
+      }),
+    );
+    return Object.fromEntries(risultati) as Record<StatoPreventivo, number>;
   },
 
   async create(input: PreventivoInput): Promise<Preventivo> {
-    await ritardo(400);
-    const righe = componiRighe(input.righe);
-    const { imponibile, totale } = calcolaTotali(righe, input.aliquotaIva);
-    const nuovo: Preventivo = {
-      id: nuovoId('pr'),
-      numero: prossimoNumero(),
-      clienteId: input.clienteId,
-      luogoInterventoId: input.luogoInterventoId,
+    const { imponibile, totale } = calcolaTotali(input.righe, input.aliquotaIva);
+
+    const riga = {
+      ...rigaDaPreventivo(input),
+      numero: await prossimoNumero(),
       // Un preventivo nasce SEMPRE in bozza: si invia con un gesto esplicito,
-      // e quel gesto è quello che scrive la data di invio.
-      stato: 'bozza',
-      dataEmissione: input.dataEmissione,
-      validoFino: input.validoFino,
-      sopralluogo: componiSopralluogo(input.sopralluogo),
-      righe,
+      // ed è quel gesto a scrivere la data di invio.
+      stato: 'bozza' as const,
       imponibile,
-      aliquotaIva: input.aliquotaIva,
       totale,
-      note: input.note,
-      creatoIl: adesso(),
-      aggiornatoIl: adesso(),
     };
-    preventivi = [nuovo, ...preventivi];
-    return nuovo;
+
+    const { data, error } = await supabase.from(TABELLA).insert(riga).select('id').single();
+    esplodi('Creazione preventivo', error);
+    return rileggi((data as { id: string }).id, 'Creazione preventivo');
   },
 
   async update(id: string, patch: Partial<PreventivoInput>): Promise<Preventivo> {
-    await ritardo(400);
-    const attuale = trova(id);
-    return scrivi(id, {
-      clienteId: patch.clienteId ?? attuale.clienteId,
-      luogoInterventoId: patch.luogoInterventoId ?? attuale.luogoInterventoId,
-      dataEmissione: patch.dataEmissione ?? attuale.dataEmissione,
-      validoFino: patch.validoFino ?? attuale.validoFino,
-      aliquotaIva: patch.aliquotaIva ?? attuale.aliquotaIva,
-      note: patch.note ?? attuale.note,
-      sopralluogo: patch.sopralluogo ? componiSopralluogo(patch.sopralluogo) : attuale.sopralluogo,
-      // Le righe in ingresso possono essere nuove (senza id) o esistenti: le
-      // prime ne ricevono uno, le seconde tengono il loro.
-      righe: patch.righe ? componiRighe(patch.righe) : attuale.righe,
-    });
+    // L'aliquota corrente serve al mapper per ricalcolare i totali quando si
+    // aggiornano le sole righe: senza, un preventivo al 10% verrebbe riscritto
+    // al 22% e il documento smetterebbe di tornare.
+    const attuale = await this.getById(id);
+    if (!attuale) throw new Error(`Preventivo ${id} non trovato`);
+
+    return scrivi(id, rigaDaPreventivo(patch, attuale.aliquotaIva), 'Aggiornamento preventivo');
   },
 
+  /**
+   * Cancellazione morbida: si scrive `deleted_at` e la vista smette di
+   * mostrarlo. Le foreign key sono `on delete restrict` apposta — una commessa
+   * non deve restare orfana del preventivo che l'ha generata.
+   */
   async remove(id: string): Promise<void> {
-    await ritardo(300);
-    preventivi = preventivi.filter((p) => p.id !== id);
+    const { error } = await supabase
+      .from(TABELLA)
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id);
+    esplodi('Eliminazione preventivo', error);
   },
 
   // ── Il ciclo di vita ───────────────────────────────────────────────────────
-  // Transizioni esplicite invece di un `update({stato})` libero: così l'insieme
-  // dei passaggi possibili si legge qui, e non va ricostruito leggendo le pagine.
+  // Transizioni esplicite invece di un `update({stato})` libero, così l'insieme
+  // dei passaggi possibili si legge qui e non va ricostruito leggendo le pagine.
   //
-  // `scaduto` non compare qui, e non è una dimenticanza: non è uno stato che si
-  // sceglie, è quello che diventa un inviato quando passa la sua validità.
+  // `scaduto` non compare, e non è una dimenticanza: non è uno stato che si
+  // sceglie, è quello che diventa un inviato quando passa la sua validità. Lo
+  // calcola la vista.
 
   /** Manda il preventivo al cliente. È il gesto che fissa la data di invio. */
   async invia(id: string): Promise<Preventivo> {
-    await ritardo(300);
-    const attuale = trova(id);
-    return scrivi(id, {
-      stato: 'inviato',
-      // Un rinvio dopo una correzione non riscrive la data del primo invio.
-      dataInvio: attuale.dataInvio ?? oggi(),
-    });
+    const attuale = await this.getById(id);
+    if (!attuale) throw new Error(`Preventivo ${id} non trovato`);
+    return scrivi(
+      id,
+      {
+        stato: 'inviato',
+        // Un rinvio dopo una correzione non riscrive la data del primo invio.
+        data_invio: attuale.dataInvio ?? new Date().toISOString(),
+      },
+      'Invio preventivo',
+    );
   },
 
   async accetta(id: string): Promise<Preventivo> {
-    await ritardo(300);
-    return scrivi(id, { stato: 'accettato', dataEsito: oggi() });
+    // `data_esito` è obbligatoria: il CHECK `chk_esito` rifiuta un accettato
+    // senza, perché uno storico che non sa dire quando è stato deciso non serve.
+    return scrivi(
+      id,
+      { stato: 'accettato', data_esito: new Date().toISOString() },
+      'Accettazione preventivo',
+    );
   },
 
   async rifiuta(id: string, motivo?: string): Promise<Preventivo> {
-    await ritardo(300);
-    const attuale = trova(id);
-    return scrivi(id, {
-      stato: 'rifiutato',
-      dataEsito: oggi(),
-      note: motivo ? [attuale.note, motivo].filter(Boolean).join('\n') : attuale.note,
-    });
+    const attuale = await this.getById(id);
+    if (!attuale) throw new Error(`Preventivo ${id} non trovato`);
+    return scrivi(
+      id,
+      {
+        stato: 'rifiutato',
+        data_esito: new Date().toISOString(),
+        note: motivo ? [attuale.note, motivo].filter(Boolean).join('\n') : (attuale.note ?? null),
+      },
+      'Rifiuto preventivo',
+    );
   },
 
   /**
    * Riporta in bozza un preventivo inviato o scaduto, per correggerlo e
-   * rimandarlo. Azzera la data di invio: quello che ripartirà è un altro
-   * documento, e tenersi la data vecchia farebbe sembrare inviato qualcosa che
-   * il cliente non ha ancora visto.
+   * rimandarlo. Azzera le date di invio ed esito: quello che ripartirà è un
+   * altro documento, e tenersi la data vecchia farebbe sembrare inviato
+   * qualcosa che il cliente non ha ancora visto.
    */
   async riportaInBozza(id: string): Promise<Preventivo> {
-    await ritardo(300);
-    return scrivi(id, { stato: 'bozza', dataInvio: undefined, dataEsito: undefined });
+    return scrivi(
+      id,
+      { stato: 'bozza', data_invio: null, data_esito: null },
+      'Ritorno in bozza',
+    );
   },
 
   // ── L'aggancio alle commesse ───────────────────────────────────────────────
@@ -279,25 +306,44 @@ export const preventiviService = {
   /**
    * Trasforma il preventivo accettato in una commessa.
    *
-   * Un preventivo già convertito non ne genera una seconda: restituisce quella
-   * che ha. Il doppio click sul bottone è la norma, non l'eccezione, e senza
-   * questo controllo produrrebbe due commesse per lo stesso lavoro.
+   * ATTENZIONE — cucitura di migrazione. `commessa_id` è una foreign key vera
+   * verso `public.commesse`, ma `commesseService` scrive ancora nell'array dei
+   * mock e restituisce id come `cm-016-a3f2`: scriverli qui farebbe fallire il
+   * vincolo con un errore di Postgres che non spiega niente a chi lo legge.
    *
-   * L'accettazione è implicita nella conversione: si converte quello che il
-   * cliente ha detto di sì, e chiedere prima un passaggio ad `accettato`
-   * lascerebbe in giro preventivi inviati con una commessa attaccata.
+   * Quindi si controlla prima e si lancia un errore che dice la verità. Il
+   * dialog di conversione lo mostra in-place — chi prova capisce che manca un
+   * pezzo di migrazione, non che il modulo è rotto.
+   *
+   * Quando la chat C migra le commesse, questo blocco `if` si cancella e non
+   * resta niente da cambiare: il resto della funzione è già quello definitivo.
    */
   async convertiInCommessa(preventivoId: string): Promise<{ commessaId: string }> {
-    await ritardo(200);
-    const p = trova(preventivoId);
+    const p = await this.getById(preventivoId);
+    if (!p) throw new Error(`Preventivo ${preventivoId} non trovato`);
     if (p.commessaId) return { commessaId: p.commessaId };
 
     const commessa = await commesseService.creaDaPreventivo(p);
-    scrivi(preventivoId, {
-      commessaId: commessa.id,
-      stato: 'accettato',
-      dataEsito: p.dataEsito ?? new Date().toISOString().slice(0, 10),
-    });
+
+    if (!UUID.test(commessa.id)) {
+      throw new Error(
+        'Le commesse non sono ancora su Supabase: la commessa è stata creata solo in memoria ' +
+          'e il collegamento non può essere salvato. Migra il modulo Commesse, poi riprova.',
+      );
+    }
+
+    await scrivi(
+      preventivoId,
+      {
+        commessa_id: commessa.id,
+        stato: 'accettato',
+        data_esito: p.dataEsito ?? new Date().toISOString(),
+      },
+      'Conversione in commessa',
+    );
     return { commessaId: commessa.id };
   },
 };
+
+/** Un id generato da Postgres è un UUID; quelli dei mock no. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

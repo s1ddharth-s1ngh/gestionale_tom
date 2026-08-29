@@ -13,6 +13,7 @@ oppure via `psql`.
 006_rls.sql         Row Level Security — LEGGERE L'AVVISO IN TESTA AL FILE
 
 010_seed_clienti.sql   dati di esempio: clienti e luoghi di intervento
+011_seed_preventivi.sql dati di esempio: 24 preventivi — richiede 010
 011_seed_commesse.sql  dati di esempio: commesse (richiede 010)
 ```
 
