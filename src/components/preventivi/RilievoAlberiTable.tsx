@@ -16,10 +16,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Plus, TreeEvergreen, Trash2 } from '@/components/ui/icons';
-import { nomiSpecie } from '@/mocks/specieAlberi';
+
 import { nuovoId } from '@/lib/utils';
 import type { Lavorazione, RilievoAlbero } from '@/types/preventivo';
-import { LAVORAZIONI, lavorazioneLabel } from '@/types/preventivo';
+import { LAVORAZIONI, NOMI_SPECIE, lavorazioneLabel } from '@/types/preventivo';
 
 /** Id del `<datalist>`: uno solo per pagina, non uno per riga. */
 const DATALIST_SPECIE = 'specie-alberi';
@@ -68,7 +68,7 @@ export function RilievoAlberiTable({ value, onChange, disabled }: RilievoAlberiT
       {/* Un solo datalist per tutte le righe: replicarlo per riga moltiplica
           trenta option per il numero di alberi rilevati. */}
       <datalist id={DATALIST_SPECIE}>
-        {nomiSpecie.map((n) => (
+        {NOMI_SPECIE.map((n) => (
           <option key={n} value={n} />
         ))}
       </datalist>

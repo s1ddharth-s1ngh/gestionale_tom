@@ -178,7 +178,7 @@ export function lavorazioneLabel(l: Lavorazione): string {
  */
 export interface RilievoAlbero {
   id: string;
-  /** Nome comune, libero: l'elenco di `mocks/specieAlberi` è un aiuto, non un vincolo. */
+  /** Nome comune, libero: `SPECIE_ALBERI` qui sotto è un aiuto, non un vincolo. */
   specie: string;
   altezzaM: number;
   /** Diametro del fusto a petto d'uomo, in centimetri. */
@@ -353,3 +353,77 @@ export function calcolaTotali(
 export function oreStimate(righe: Pick<RigaPreventivo, 'quantita' | 'unita'>[]): number {
   return righe.filter((r) => r.unita === 'ore').reduce((tot, r) => tot + r.quantita, 0);
 }
+
+// ── Le specie ───────────────────────────────────────────────────────────────
+
+/**
+ * Le specie che si incontrano nei cantieri di Tom, in Emilia-Romagna: alberate
+ * stradali, parchi comunali, giardini condominiali, filari agricoli.
+ *
+ * Sta qui e non in `mocks/` perché non è un dato finto in attesa di un backend:
+ * è vocabolario di dominio, come `LAVORAZIONI` e `CRITICITA`. Tenerlo nei mock
+ * costringeva un componente a importare da lì, che CONVENTIONS §4.1 vieta —
+ * e a ragione, perché il giorno della migrazione non si sarebbe capito se
+ * andava spostato nel database o no. Non ci va: è un elenco chiuso di nomi.
+ *
+ * È un AIUTO per l'autocomplete, non un vincolo: `RilievoAlbero.specie` resta
+ * una stringa libera, perché un rilievo bloccato in cantiere davanti a un
+ * ibrido fuori elenco è peggio di un nome scritto a mano.
+ *
+ * Il nome scientifico c'è perché sui documenti per il Comune si scrive quello.
+ */
+export interface SpecieAlbero {
+  nome: string;
+  nomeScientifico: string;
+  /** Sempreverde o caduca: decide la stagione in cui si pota. */
+  fogliame: 'caduca' | 'sempreverde';
+}
+
+export const SPECIE_ALBERI: SpecieAlbero[] = [
+  // Conifere
+  { nome: "Cedro dell'Atlante", nomeScientifico: 'Cedrus atlantica', fogliame: 'sempreverde' },
+  { nome: 'Cedro del Libano', nomeScientifico: 'Cedrus libani', fogliame: 'sempreverde' },
+  { nome: 'Cedro deodara', nomeScientifico: 'Cedrus deodara', fogliame: 'sempreverde' },
+  { nome: 'Pino domestico', nomeScientifico: 'Pinus pinea', fogliame: 'sempreverde' },
+  { nome: "Pino d'Aleppo", nomeScientifico: 'Pinus halepensis', fogliame: 'sempreverde' },
+  { nome: 'Cipresso comune', nomeScientifico: 'Cupressus sempervirens', fogliame: 'sempreverde' },
+  { nome: 'Abete rosso', nomeScientifico: 'Picea abies', fogliame: 'sempreverde' },
+  { nome: 'Tasso', nomeScientifico: 'Taxus baccata', fogliame: 'sempreverde' },
+
+  // Latifoglie da alberata
+  { nome: 'Platano', nomeScientifico: 'Platanus × acerifolia', fogliame: 'caduca' },
+  { nome: 'Tiglio', nomeScientifico: 'Tilia cordata', fogliame: 'caduca' },
+  { nome: 'Ippocastano', nomeScientifico: 'Aesculus hippocastanum', fogliame: 'caduca' },
+  { nome: 'Bagolaro', nomeScientifico: 'Celtis australis', fogliame: 'caduca' },
+  { nome: 'Frassino', nomeScientifico: 'Fraxinus excelsior', fogliame: 'caduca' },
+  { nome: 'Acero campestre', nomeScientifico: 'Acer campestre', fogliame: 'caduca' },
+  { nome: 'Acero riccio', nomeScientifico: 'Acer platanoides', fogliame: 'caduca' },
+  { nome: 'Carpino bianco', nomeScientifico: 'Carpinus betulus', fogliame: 'caduca' },
+  { nome: 'Betulla', nomeScientifico: 'Betula pendula', fogliame: 'caduca' },
+  { nome: 'Liquidambar', nomeScientifico: 'Liquidambar styraciflua', fogliame: 'caduca' },
+
+  // Querce e grandi latifoglie
+  { nome: 'Quercia farnia', nomeScientifico: 'Quercus robur', fogliame: 'caduca' },
+  { nome: 'Roverella', nomeScientifico: 'Quercus pubescens', fogliame: 'caduca' },
+  { nome: 'Leccio', nomeScientifico: 'Quercus ilex', fogliame: 'sempreverde' },
+  { nome: 'Faggio', nomeScientifico: 'Fagus sylvatica', fogliame: 'caduca' },
+
+  // Specie di ripa e infestanti
+  { nome: 'Salice piangente', nomeScientifico: 'Salix babylonica', fogliame: 'caduca' },
+  { nome: 'Pioppo cipressino', nomeScientifico: 'Populus nigra "Italica"', fogliame: 'caduca' },
+  { nome: 'Pioppo bianco', nomeScientifico: 'Populus alba', fogliame: 'caduca' },
+  { nome: 'Robinia', nomeScientifico: 'Robinia pseudoacacia', fogliame: 'caduca' },
+  { nome: 'Ailanto', nomeScientifico: 'Ailanthus altissima', fogliame: 'caduca' },
+  { nome: 'Ontano nero', nomeScientifico: 'Alnus glutinosa', fogliame: 'caduca' },
+
+  // Giardino e siepi
+  { nome: 'Magnolia', nomeScientifico: 'Magnolia grandiflora', fogliame: 'sempreverde' },
+  { nome: 'Lauroceraso', nomeScientifico: 'Prunus laurocerasus', fogliame: 'sempreverde' },
+  { nome: 'Alloro', nomeScientifico: 'Laurus nobilis', fogliame: 'sempreverde' },
+  { nome: 'Olivo', nomeScientifico: 'Olea europaea', fogliame: 'sempreverde' },
+  { nome: 'Ciliegio da fiore', nomeScientifico: 'Prunus serrulata', fogliame: 'caduca' },
+  { nome: 'Nocciolo', nomeScientifico: 'Corylus avellana', fogliame: 'caduca' },
+];
+
+/** I soli nomi comuni, per il `<datalist>` del rilievo. */
+export const NOMI_SPECIE: string[] = SPECIE_ALBERI.map((s) => s.nome);
