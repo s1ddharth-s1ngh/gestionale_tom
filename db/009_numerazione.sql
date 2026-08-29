@@ -1,5 +1,5 @@
 -- =============================================================================
--- 008 — Numerazione atomica delle fatture attive
+-- 009 — Numerazione atomica delle fatture attive
 -- =============================================================================
 -- Il problema che risolve: «leggi l'ultimo numero, aggiungi uno, scrivi» fatto
 -- dal browser è una corsa. Fra la lettura e la scrittura un'altra scheda può
