@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clientiService } from '@/services/clientiService';
-import type { ClienteFiltri, ClienteInput } from '@/types/cliente';
+import type { ClienteFiltri, ClienteInput, LuogoIntervento } from '@/types/cliente';
 
 /**
  * Hook dei clienti. docs/CONVENTIONS.md §4.3.
@@ -73,6 +73,43 @@ export function useEliminaCliente() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => clientiService.remove(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: clientiKeys.all }),
+  });
+}
+
+// ── Luoghi di intervento ─────────────────────────────────────────────────────
+// Stanno in una tabella loro, ma si vedono e si modificano solo dentro la
+// scheda del cliente: invalidano quindi le stesse chiavi.
+
+export function useAggiungiLuogo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ clienteId, luogo }: { clienteId: string; luogo: Omit<LuogoIntervento, 'id'> }) =>
+      clientiService.aggiungiLuogo(clienteId, luogo),
+    onSuccess: () => qc.invalidateQueries({ queryKey: clientiKeys.all }),
+  });
+}
+
+export function useAggiornaLuogo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      clienteId,
+      luogoId,
+      patch,
+    }: {
+      clienteId: string;
+      luogoId: string;
+      patch: Omit<LuogoIntervento, 'id'>;
+    }) => clientiService.aggiornaLuogo(clienteId, luogoId, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: clientiKeys.all }),
+  });
+}
+
+export function useRimuoviLuogo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (luogoId: string) => clientiService.rimuoviLuogo(luogoId),
     onSuccess: () => qc.invalidateQueries({ queryKey: clientiKeys.all }),
   });
 }
