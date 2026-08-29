@@ -44,6 +44,7 @@ set search_path = public
 as $$
 declare
   v_prossimo integer;
+  v_massimo  integer;
   v_numero   text;
   v_esistente text;
 begin
@@ -57,12 +58,26 @@ begin
     return v_esistente;
   end if;
 
-  -- `on conflict do update` invece di un select seguito da insert: anche la
-  -- creazione della riga dell'anno è una corsa, il primo gennaio.
+  -- Il contatore si riallinea PRIMA di incrementare, e non è pignoleria: al
+  -- primo giro, in un database appena creato, la riga dell'anno non esiste
+  -- ancora mentre le fatture del seed sì — perché lo schema si esegue prima
+  -- dei dati. Senza questa riga il progressivo ripartirebbe da 1 e collider
+  -- ebbe con FT-AAAA-0001 già presente.
+  --
+  -- Vale anche dopo: se qualcuno importa fatture scrivendo il numero a mano,
+  -- il contatore si adegua da solo invece di produrre duplicati finché non
+  -- rilancia il file.
+  select coalesce(max(nullif(regexp_replace(numero, '^FT-\d{4}-', ''), '')::int), 0)
+  into v_massimo
+  from public.fatture
+  where numero ~ ('^FT-' || p_anno::text || '-\d+$');
+
   insert into public.progressivi_fattura (anno, ultimo)
-  values (p_anno, 1)
+  values (p_anno, v_massimo + 1)
   on conflict (anno) do update
-    set ultimo = public.progressivi_fattura.ultimo + 1,
+    -- `greatest` e non `+ 1` secco: se il massimo in tabella è più avanti del
+    -- contatore, vince la tabella.
+    set ultimo = greatest(public.progressivi_fattura.ultimo, excluded.ultimo - 1) + 1,
         aggiornato_il = now()
   returning ultimo into v_prossimo;
 

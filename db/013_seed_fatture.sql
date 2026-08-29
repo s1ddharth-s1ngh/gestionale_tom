@@ -38,7 +38,7 @@ insert into public.fatture (
  '[{"id":"r1","descrizione":"Potatura di rimonda del secco su quattro tigli, via Battisti 14","quantita":1,"prezzoUnitario":620,"aliquotaIva":10},
    {"id":"r2","descrizione":"Cippatura e smaltimento della ramaglia","quantita":1,"prezzoUnitario":340,"aliquotaIva":10}]'::jsonb,
  -- L'incasso chiude la fattura: 960 di imponibile + 96 di IVA al 10%.
- '[{"id":"i1","data":"' || to_char(current_date - 9, 'YYYY-MM-DD') || '","importo":1056,"metodo":"bonifico","riferimento":"CRO 8842190"}]'::jsonb,
+ ('[{"id":"i1","data":"' || to_char(current_date - 9, 'YYYY-MM-DD') || '","importo":1056,"metodo":"bonifico","riferimento":"CRO 8842190"}]')::jsonb,
  '[]'::jsonb, null,
  'Aliquota agevolata al 10%: lavori sulle parti comuni di un condominio.'),
 
@@ -46,7 +46,7 @@ insert into public.fatture (
  'FT-' || to_char(current_date, 'YYYY') || '-0002', 'acconto',
  '00000000-0000-4000-8000-000000000003', 'emessa', current_date - 34, current_date - 4,
  '[{"id":"r1","descrizione":"Acconto 30% su abbattimento cedro dell''Atlante, parco Rodari","quantita":1,"prezzoUnitario":1665,"aliquotaIva":22}]'::jsonb,
- '[{"id":"i1","data":"' || to_char(current_date - 11, 'YYYY-MM-DD') || '","importo":2031.30,"metodo":"bonifico","riferimento":"Mandato 1204"}]'::jsonb,
+ ('[{"id":"i1","data":"' || to_char(current_date - 11, 'YYYY-MM-DD') || '","importo":2031.30,"metodo":"bonifico","riferimento":"Mandato 1204"}]')::jsonb,
  '[]'::jsonb,
  '{"codiceDestinatario":"UFY8T4","tipoDocumento":"TD02","regimeFiscale":"RF01","riferimentoAmministrazione":"Determina 412/2026","scissionePagamenti":true}'::jsonb,
  'Acconto 30% come da capitolato.'),
@@ -55,7 +55,7 @@ insert into public.fatture (
  'FT-' || to_char(current_date, 'YYYY') || '-0003', 'unica',
  '00000000-0000-4000-8000-00000000000b', 'emessa', current_date - 22, current_date - 7,
  '[{"id":"r1","descrizione":"Abbattimento di una robinia pericolante e fresatura della ceppaia","quantita":1,"prezzoUnitario":480,"aliquotaIva":22}]'::jsonb,
- '[{"id":"i1","data":"' || to_char(current_date - 22, 'YYYY-MM-DD') || '","importo":585.60,"metodo":"contanti"}]'::jsonb,
+ ('[{"id":"i1","data":"' || to_char(current_date - 22, 'YYYY-MM-DD') || '","importo":585.60,"metodo":"contanti"}]')::jsonb,
  '[]'::jsonb, null, null),
 
 -- ── Pagate parziali ──────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ insert into public.fatture (
  '[{"id":"r1","descrizione":"Saldo abbattimento cedro dell''Atlante di 18 m con piattaforma aerea","quantita":1,"prezzoUnitario":2885,"aliquotaIva":22},
    {"id":"r2","descrizione":"Noleggio piattaforma 22 m, 2 giornate","quantita":2,"prezzoUnitario":500,"aliquotaIva":22}]'::jsonb,
  -- Metà del totale: la fattura resta «pagata parziale» finché non scade.
- '[{"id":"i1","data":"' || to_char(current_date - 3, 'YYYY-MM-DD') || '","importo":2367.85,"metodo":"bonifico","riferimento":"Mandato 1731"}]'::jsonb,
+ ('[{"id":"i1","data":"' || to_char(current_date - 3, 'YYYY-MM-DD') || '","importo":2367.85,"metodo":"bonifico","riferimento":"Mandato 1731"}]')::jsonb,
  '[]'::jsonb, null,
  'Saldo: totale lavori meno l''acconto della FT-0002.'),
 
@@ -74,7 +74,7 @@ insert into public.fatture (
  '00000000-0000-4000-8000-000000000009', 'emessa', current_date - 14, current_date + 16,
  '[{"id":"r1","descrizione":"Potatura di contenimento di sei pini domestici lungo il viale di accesso","quantita":6,"prezzoUnitario":210,"aliquotaIva":22},
    {"id":"r2","descrizione":"Trattamento endoterapico contro la processionaria","quantita":6,"prezzoUnitario":45,"aliquotaIva":22}]'::jsonb,
- '[{"id":"i1","data":"' || to_char(current_date - 2, 'YYYY-MM-DD') || '","importo":746.50,"metodo":"riba","riferimento":"Ri.Ba. 04/2026"}]'::jsonb,
+ ('[{"id":"i1","data":"' || to_char(current_date - 2, 'YYYY-MM-DD') || '","importo":746.50,"metodo":"riba","riferimento":"Ri.Ba. 04/2026"}]')::jsonb,
  '[]'::jsonb, null, null),
 
 -- ── Scadute ──────────────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ insert into public.fatture (
  'FT-' || to_char(current_date, 'YYYY') || '-0007', 'saldo',
  '00000000-0000-4000-8000-000000000004', 'emessa', current_date - 58, current_date - 28,
  '[{"id":"r1","descrizione":"Sfalcio e trinciatura di due ettari di argine, saldo","quantita":1,"prezzoUnitario":1240,"aliquotaIva":22}]'::jsonb,
- '[{"id":"i1","data":"' || to_char(current_date - 40, 'YYYY-MM-DD') || '","importo":529.50,"metodo":"bonifico","riferimento":"CRO 7719002"}]'::jsonb,
+ ('[{"id":"i1","data":"' || to_char(current_date - 40, 'YYYY-MM-DD') || '","importo":529.50,"metodo":"bonifico","riferimento":"CRO 7719002"}]')::jsonb,
  ('[{"id":"s1","data":"' || to_char(current_date - 10, 'YYYY-MM-DD') || '","canale":"email","note":"Sollecito sul residuo."}]')::jsonb,
  null, null),
 
