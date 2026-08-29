@@ -8,10 +8,8 @@ import { TablePagination } from '@/components/ui/pagination';
 import { useCommesse, useConteggiCommesse } from '@/hooks/useCommesse';
 import { pluralize } from '@/lib/utils';
 import type { CommessaFiltri } from '@/types/commessa';
-import {
-  CommesseCalendario,
-  finestraDelMese,
-} from '@/components/commesse/CommesseCalendario';
+import { CommesseCalendario } from '@/components/commesse/CommesseCalendario';
+import { finestraDelMese } from '@/components/commesse/calendarioUtils';
 import { CommesseTable } from '@/components/commesse/CommesseTable';
 import {
   CommesseToolbar,

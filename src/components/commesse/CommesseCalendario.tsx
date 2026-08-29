@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight } from '@/components/ui/icons';
 import { Skeleton } from '@/components/ui/skeleton';
 import { STATUS_PILL_ACCENT } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
+import { caselleDelMese, isoLocale } from './calendarioUtils';
 import { formatOre } from '@/lib/formatters';
 import type { CommessaConCliente } from '@/types/commessa';
 import { statoCommessaAccent, statoCommessaLabel } from '@/types/commessa';
@@ -34,43 +35,6 @@ const MESI = [
  * crescere e sfonda l'allineamento di tutta la riga.
  */
 const MAX_PER_CELLA = 3;
-
-/** ISO `AAAA-MM-GG` di una data locale. `toISOString()` no: sposta di fuso. */
-export function isoLocale(d: Date): string {
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const gg = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${mm}-${gg}`;
-}
-
-/** Il lunedì della settimana che contiene `d`. Domenica appartiene alla settimana che finisce. */
-function lunediDi(d: Date): Date {
-  const out = new Date(d);
-  const dow = (out.getDay() + 6) % 7; // 0 = lunedì
-  out.setDate(out.getDate() - dow);
-  out.setHours(12, 0, 0, 0);
-  return out;
-}
-
-/**
- * Le 42 caselle della griglia: sei settimane sempre, anche quando il mese ne
- * occupa cinque. Una griglia che cambia altezza a ogni cambio mese fa saltare
- * tutto quello che le sta sotto.
- */
-export function caselleDelMese(anno: number, mese: number): Date[] {
-  const inizio = lunediDi(new Date(anno, mese, 1));
-  return Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(inizio);
-    d.setDate(inizio.getDate() + i);
-    d.setHours(12, 0, 0, 0);
-    return d;
-  });
-}
-
-/** Primo e ultimo giorno delle 42 caselle: è la finestra da chiedere al service. */
-export function finestraDelMese(anno: number, mese: number): { dal: string; al: string } {
-  const caselle = caselleDelMese(anno, mese);
-  return { dal: isoLocale(caselle[0]), al: isoLocale(caselle[41]) };
-}
 
 interface CommesseCalendarioProps {
   anno: number;

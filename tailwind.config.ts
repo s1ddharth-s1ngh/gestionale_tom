@@ -1,4 +1,7 @@
 import type { Config } from 'tailwindcss';
+// Import ESM e non `require()`: questo file è un modulo TypeScript, e il
+// `require` ci stava solo perché è come lo scrive shadcn nei suoi esempi.
+import animate from 'tailwindcss-animate';
 
 export default {
   // `class` e non `media`: il tema è scuro sempre, e la classe la mette
@@ -77,7 +80,7 @@ export default {
     },
   },
   plugins: [
-    require('tailwindcss-animate'),
+    animate,
     // .scrollbar-hide — nasconde la scrollbar mantenendo lo scroll attivo.
     // Serve alle file di pill che scorrono in orizzontale sotto sm, dove una
     // scrollbar visibile sporcherebbe la barra.

@@ -5,7 +5,11 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  // Le edge function sono Deno, non browser: hanno il proprio runtime, i
+  // propri global (`Deno`) e import da `jsr:`. Passarle da questa configurazione
+  // significa segnalare errori su codice che non gira qui, e nascondere quelli
+  // veri sotto il rumore. Si controllano con `deno check`.
+  { ignores: ['dist', 'supabase/functions'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

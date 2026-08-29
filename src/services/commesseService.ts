@@ -73,6 +73,23 @@ async function clientiCheMatchano(termine: string): Promise<string[]> {
 }
 
 /**
+ * I soli quattro metodi del query builder che qui servono.
+ *
+ * Tipizzarlo così invece che con `any`: il tipo vero di supabase-js cambia a
+ * ogni concatenazione e scriverlo per esteso costerebbe più di quanto renda, ma
+ * `any` spegnerebbe i controlli anche su nomi di colonna e forma delle
+ * condizioni — che sono esattamente le due cose che qui si sbagliano.
+ * `T extends Filtrabile<T>` tiene il tipo del chiamante intatto dall'ingresso
+ * all'uscita.
+ */
+interface Filtrabile<T> {
+  eq(colonna: string, valore: string): T;
+  gte(colonna: string, valore: string): T;
+  lte(colonna: string, valore: string): T;
+  or(condizioni: string): T;
+}
+
+/**
  * Applica i filtri che non sono lo stato. Condiviso da `list` e
  * `contaPerStato`, o i contatori delle pill direbbero numeri che non c'entrano
  * con la tabella che stanno sopra.
@@ -82,14 +99,12 @@ async function clientiCheMatchano(termine: string): Promise<string[]> {
  * il risultato al posto del builder da continuare a comporre. Gli id dei
  * clienti che matchano vanno quindi risolti prima, fuori di qui.
  */
-function conFiltriNonStato<T>(
+function conFiltriNonStato<T extends Filtrabile<T>>(
   q: T,
   filtri?: Omit<CommessaFiltri, 'stato' | 'pagina' | 'perPagina'>,
   idClienti: string[] = [],
 ): T {
-  // Il tipo del builder cambia a ogni concatenazione: tipizzarlo per esteso
-  // costerebbe più di quanto renda.
-  let out = q as any;
+  let out = q;
 
   if (filtri?.clienteId) out = out.eq('cliente_id', filtri.clienteId);
 
@@ -107,7 +122,7 @@ function conFiltriNonStato<T>(
     out = out.or(condizioni.join(','));
   }
 
-  return out as T;
+  return out;
 }
 
 /**
