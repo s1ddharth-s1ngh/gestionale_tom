@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Token del design system — docs/DESIGN_SYSTEM.md §1 e §2.
+ *
+ * Qui c'è UN solo set di valori, quelli scuri. Telebi ne ha tre sovrapposti
+ * (il default shadcn chiaro, un set "core/globals/components" in stile Webflow,
+ * i colori brand TELEBI) e le sue pagine mature non ne leggono quasi nessuno:
+ * scrivono valori arbitrari Tailwind (`bg-[#111111]`). Qui dichiaro solo ciò
+ * che serve davvero alle primitive shadcn, e le superfici restano quelle
+ * documentate nel design system.
+ */
+@layer base {
+  :root {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+
+    --card: 0 0% 6.7%;
+    --card-foreground: 0 0% 100%;
+
+    --popover: 220 6% 4%;
+    --popover-foreground: 0 0% 100%;
+
+    /* #1E6FFF — il blu delle azioni */
+    --primary: 218 100% 56%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 10%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 8%;
+    --muted-foreground: 0 0% 55%;
+
+    --accent: 0 0% 10%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 12%;
+    --input: 0 0% 8%;
+    --ring: 218 100% 56%;
+
+    --radius: 0.5rem;
+  }
+
+  /* Il tema è scuro sempre: non c'è un toggle e non c'è una variante chiara.
+     La classe sta su <html> perché tailwind è in darkMode: ['class']. */
+  html {
+    @apply dark;
+    font-family: 'Urbanist', sans-serif;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-black text-foreground;
+    font-family: 'Urbanist', sans-serif;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #root {
+    @apply min-h-screen bg-black;
+  }
+
+  /* Scrollbar sottile — su fondo nero quella di sistema è una barra bianca
+     larga che spacca il ritmo delle superfici. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
