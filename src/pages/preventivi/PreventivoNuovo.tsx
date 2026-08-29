@@ -13,15 +13,17 @@ import { Spinner } from '@/components/ui/spinner';
 import { ClienteSelect } from '@/components/shared/ClienteSelect';
 import { LuogoInterventoSelect } from '@/components/shared/LuogoInterventoSelect';
 import { SopralluogoForm } from '@/components/preventivi/SopralluogoForm';
+import { RighePreventivoTable } from '@/components/preventivi/RighePreventivoTable';
 import { useCreaPreventivo } from '@/hooks/usePreventivi';
 import type { Foto } from '@/types/comune';
-import type { Accessibilita, Criticita, Lavorazione } from '@/types/preventivo';
+import type { Accessibilita, Criticita, Lavorazione, UnitaMisura } from '@/types/preventivo';
 import {
   ACCESSIBILITA,
   ALIQUOTA_IVA_DEFAULT,
   CRITICITA,
   LAVORAZIONI,
   SOPRALLUOGO_VUOTO,
+  UNITA_MISURA,
   VALIDITA_GIORNI_DEFAULT,
 } from '@/types/preventivo';
 
@@ -32,6 +34,15 @@ import {
  * aggiunge una, la validazione la rifiuta senza dire perché.
  */
 const comeTupla = <T extends string>(v: T[]) => v as [T, ...T[]];
+
+const rigaSchema = z.object({
+  id: z.string(),
+  descrizione: z.string().trim().min(1, 'Descrivi la lavorazione'),
+  quantita: z.coerce.number(),
+  unita: z.enum(comeTupla<UnitaMisura>(UNITA_MISURA)),
+  // Nessun `.min(0)`: uno sconto a totale è una riga con prezzo negativo.
+  prezzoUnitario: z.coerce.number(),
+});
 
 const alberoSchema = z.object({
   id: z.string(),
@@ -51,6 +62,7 @@ const schema = z
     validoFino: z.string().min(1, 'Indica fino a quando è valido'),
     aliquotaIva: z.coerce.number().min(0, 'Non può essere negativa').max(100, 'Al massimo 100'),
     note: z.string().optional(),
+    righe: z.array(rigaSchema),
     sopralluogo: z.object({
       dataSopralluogo: z.string().optional(),
       accessibilita: z.enum(comeTupla<Accessibilita>(ACCESSIBILITA)),
@@ -106,10 +118,12 @@ export default function PreventivoNuovo() {
       aliquotaIva: ALIQUOTA_IVA_DEFAULT,
       note: '',
       sopralluogo: SOPRALLUOGO_VUOTO,
+      righe: [],
     },
   });
 
   const clienteId = watch('clienteId');
+  const aliquotaIva = watch('aliquotaIva');
 
   const onSubmit = handleSubmit(async (valori) => {
     const creato = await crea.mutateAsync({
@@ -120,9 +134,14 @@ export default function PreventivoNuovo() {
       aliquotaIva: valori.aliquotaIva,
       note: valori.note || undefined,
       sopralluogo: valori.sopralluogo,
-      // Le righe economiche si aggiungono dal dettaglio: un preventivo nasce
-      // dal sopralluogo, e i prezzi si fanno dopo, a tavolino.
-      righe: [],
+      // Gli id delle righe sono nostri, servono solo come chiave di React
+      // mentre si compila: quelli veri li assegna il service.
+      righe: valori.righe.map((r) => ({
+        descrizione: r.descrizione,
+        quantita: r.quantita,
+        unita: r.unita,
+        prezzoUnitario: r.prezzoUnitario,
+      })),
     });
     toast.success(`Preventivo ${creato.numero} creato in bozza`);
     navigate(`/preventivi/${creato.id}`);
@@ -254,6 +273,25 @@ export default function PreventivoNuovo() {
         />
         {messaggioAlberi && <p className="mt-2 text-xs text-red-400">{messaggioAlberi}</p>}
       </div>
+
+      <SectionBox title="Righe economiche">
+        <Controller
+          control={control}
+          name="righe"
+          render={({ field }) => (
+            <RighePreventivoTable
+              value={field.value}
+              onChange={field.onChange}
+              aliquotaIva={aliquotaIva}
+            />
+          )}
+        />
+        {Array.isArray(errors.righe) && (
+          <p className="mt-2 text-xs text-red-400">
+            Ogni riga deve avere una descrizione: è quello che il cliente legge accanto al prezzo.
+          </p>
+        )}
+      </SectionBox>
 
       <SectionBox title="Note per il cliente">
         <Textarea
