@@ -286,3 +286,19 @@ un'altra chat a metà lavoro: **non aggiustarlo**.
 - [ ] aprire un fornitore e vedere i suoi costi
 
 Poi scrivi a Omar: cosa hai fatto, cosa può verificare, cosa è rimasto aperto.
+
+---
+
+## Il confine col backend
+
+**Solo frontend, con i mock. Nessun Supabase collegato, per nessun motivo.**
+
+Non si installa `@supabase/supabase-js`, non si crea `integrations/supabase/`, non si mette
+una `VITE_SUPABASE_URL`, e i mock non si sostituiscono con chiamate vere nemmeno per prova.
+
+Si può invece **scrivere l'SQL** delle tabelle che serviranno, come preparazione: va in
+`db/` alla radice, file numerati (`db/003_preventivi.sql`), con le tre colonne di audit di
+Telebi (`created_at`, `updated_at`, `deleted_at`). È documentazione eseguibile: non la lancia
+nessuno e non la importa nessun modulo. La cartella `supabase/migrations/` **non si crea**.
+
+Dettagli in `docs/CONVENTIONS.md` §11.

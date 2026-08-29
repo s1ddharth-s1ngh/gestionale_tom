@@ -468,3 +468,35 @@ Dal tuo prompt, messe qui perché non si perdano:
 3. **Nessuna dipendenza nuova senza chiedertelo prima.**
 4. **Tutti i dati passano da `services/`.** Nessun import da `mocks/` fuori da lì.
 5. **UI in italiano.** Sempre.
+
+---
+
+## 11. Il confine col backend (regola 2026-08-29)
+
+**Adesso si fa solo il frontend. Nessun Supabase collegato, per nessun motivo.**
+
+In concreto:
+
+| | Cosa | Si può? |
+|---|---|---|
+| ✅ | Componenti, pagine, hook, service con dati mock | **Sì** |
+| ✅ | Scrivere lo **schema SQL** delle tabelle, come file di preparazione | **Sì** |
+| ✅ | Ragionare su quali **edge function** serviranno, e scriverne la bozza | **Sì, al massimo** |
+| ❌ | Installare `@supabase/supabase-js` o qualsiasi client | **NO** |
+| ❌ | Un file `integrations/supabase/client.ts`, una `VITE_SUPABASE_URL`, un `.env` | **NO** |
+| ❌ | Sostituire i mock con chiamate vere, anche "solo per provare" | **NO** |
+
+**Perché.** Il layer dati è già costruito per essere sostituito in un file per entità
+(§4): il giorno che il backend arriva, si cambia il corpo dei `service` e non si tocca una
+riga di componente. Agganciarlo adesso, mentre quattro chat scrivono in parallelo, vuol dire
+quattro modi diversi di parlare col database — e il valore di quel layer si perde prima
+ancora di averlo usato.
+
+**Dove va l'SQL, se lo scriviamo.** In `db/` alla radice del progetto, come file numerati
+(`db/001_clienti.sql`). È documentazione eseguibile: descrive le tabelle che serviranno, non
+viene eseguita da nessuno e non la importa nessun modulo. `supabase/migrations/` **non si
+crea**: quella cartella ha un significato preciso per la CLI di Supabase e crearla adesso
+farebbe credere che ci sia un progetto collegato.
+
+Le stesse convenzioni di schema di Telebi valgono già da ora, così l'SQL nasce giusto:
+ogni tabella ha `created_at`, `updated_at`, `deleted_at` (soft-delete, `NULL` = riga attiva).
