@@ -1,0 +1,3 @@
+# Nel repo si salva sempre LF: si lavora su Windows ma il progetto è JS/TS,
+# dove il CRLF committato sporca ogni diff con righe che nessuno ha toccato.
+* text=auto eol=lf
