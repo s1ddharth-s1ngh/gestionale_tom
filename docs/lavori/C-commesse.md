@@ -296,3 +296,93 @@ Telebi (`created_at`, `updated_at`, `deleted_at`). È documentazione eseguibile:
 nessuno e non la importa nessun modulo. La cartella `supabase/migrations/` **non si crea**.
 
 Dettagli in `docs/CONVENTIONS.md` §11.
+
+
+---
+
+## FASE 2 — I dati veri: da mock a Supabase
+
+> Aggiunta del 2026-08-29. **Sostituisce** la regola «solo mock» del confine col backend:
+> adesso il database c'è e i service ci vanno sopra. Il resto di quel paragrafo — niente
+> client Supabase fuori dai service — vale più di prima.
+
+### Cosa è già fatto
+
+- **Lo schema è scritto**, in `db/`. File numerati da eseguire in ordine dal SQL Editor, più
+  `db/README.md` che spiega le tre decisioni che lo governano. Non modificarli: se ti serve
+  una colonna, chiedi a Omar.
+- **Il client c'è**: `src/lib/supabase.ts`. Lo importano **solo i service**, mai un componente
+  e mai un hook — è la regola 1 di `CONVENTIONS.md` §4, la stessa che valeva per `mocks/`.
+- **`clientiService` è già migrato**, ed è il tuo modello. Leggi
+  `src/services/clientiService.ts` e `src/services/clientiMapper.ts` prima di scrivere una riga.
+
+### Le firme non cambiano
+
+È il punto. `list()`, `getById()`, `create()`, `update()`, `remove()` restano identiche:
+cambia solo il corpo. Nessuna pagina, nessun hook, nessun componente va toccato — è lo scopo
+per cui il layer è separato. Se ti accorgi che per migrare devi cambiare un componente,
+fermati: quel componente stava facendo lavoro che spettava al service.
+
+### Le sei cose da copiare da `clientiService`
+
+1. **Un mapper a parte**, `<entita>Mapper.ts`. Il database parla snake_case, l'app camelCase.
+   Con la traduzione in un file solo, quando una colonna cambia nome si tocca un posto solo.
+2. **Ogni errore viene lanciato.** PostgREST non solleva eccezioni: torna `{ data, error }`, e
+   un `error` ignorato diventa una lista vuota — cioè un bug che si presenta come «non ci sono
+   dati». C'è un helper `esplodi(contesto, error)` da ricopiare.
+3. **Filtro, ordinamento e paginazione li fa il database** (`.eq()`, `.or()`, `.range()`). Se
+   restassero in un `useMemo` dentro la pagina, adesso scaricherebbero la tabella intera per
+   mostrarne venti righe.
+4. **Il conteggio dalla stessa query**, con `select(..., { count: 'exact' })`. Due query
+   separate possono vedere stati diversi del database e dare una paginazione che non torna.
+5. **Soft-delete, mai `DELETE`**: si scrive `deleted_at` e si filtra `.is('deleted_at', null)`.
+   Le foreign key sono `on delete restrict` proprio per questo.
+6. **`maybeSingle()` e non `single()`** sul getById: su zero righe `single` è un errore, e un
+   id inesistente non è un guasto — è un 404 da mostrare.
+
+### La regola nuova: leggere dalle viste, scrivere sulle tabelle
+
+Gli stati derivati **non sono salvati**. Un preventivo scaduto, una fattura pagata, le ore
+reali di una commessa si calcolano — in tabella resta solo la decisione umana. Le viste
+(`v_preventivi`, `v_commesse`, `v_fatture`, `v_costi`) aggiungono il resto e portano già
+dentro la denominazione del cliente, così non serve un secondo giro per mostrarla in lista.
+
+Quindi: **`select` dalla vista, `insert` e `update` sulla tabella.** Una lista che legge la
+tabella mostrerebbe «emessa» una fattura che è già stata pagata.
+
+### I mock non si cancellano
+
+Restano in `src/mocks/` e diventano la sorgente del **seed**. Scrivi il tuo
+`db/0NN_seed_<entita>.sql` sul modello di `db/010_seed_clienti.sql`: id fissi e
+`on conflict (id) do nothing`, così rilanciarlo non duplica niente. Senza seed il database è
+vuoto e non si vede se le schermate reggono.
+
+I `cliente_id` del tuo seed devono essere quelli di `010_seed_clienti.sql`
+(`00000000-0000-4000-8000-0000000000NN`), o le join non risolvono.
+
+### Come verifichi
+
+`npm run typecheck` non basta più: passa anche con una query sbagliata. Serve guardare l'app
+col database collegato — elenco, dettaglio, creazione, modifica, eliminazione — tenendo
+d'occhio la console, dove arrivano gli errori PostgREST.
+
+### Le tue tabelle
+
+| | |
+|---|---|
+| Tabella | `commesse` |
+| Vista da cui leggere | `v_commesse` — aggiunge `cliente_denominazione` |
+| File di schema | `db/003_commesse.sql` |
+| Seed da scrivere | `db/012_seed_commesse.sql` |
+
+**`ore_reali` e `avanzamento_pct` non li scrivi tu.** Un trigger
+(`commesse_ricalcola_derivati`) li ricalcola dalle lavorazioni a ogni insert e a ogni update
+del campo `lavorazioni`. È la regola che avevi già — «oreReali è la somma delle lavorazioni,
+non un campo scrivibile a mano» — ma adesso la fa rispettare il database, quindi vale anche
+per una correzione fatta da SQL. Se li mandi lo stesso, il trigger li sovrascrive.
+
+`lavorazioni`, `foto_prima`, `foto_dopo` e `rapportino` sono colonne **JSONB**. La firma del
+cliente è il `dataUrl` del canvas, dentro `rapportino`.
+
+Due `CHECK` da conoscere: una commessa `pianificata` deve avere `data_pianificata` — senza,
+sparirebbe dal calendario — e `data_fine` non può precedere `data_inizio`.
