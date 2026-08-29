@@ -2,13 +2,16 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { DarkSection } from '@/components/ui/dark-section';
-import { Calendar, Plus } from '@/components/ui/icons';
+import { Plus } from '@/components/ui/icons';
 import { PageHeader } from '@/components/ui/page-header';
 import { TablePagination } from '@/components/ui/pagination';
-import { TableEmptyState } from '@/components/ui/table-empty-state';
 import { useCommesse, useConteggiCommesse } from '@/hooks/useCommesse';
 import { pluralize } from '@/lib/utils';
 import type { CommessaFiltri } from '@/types/commessa';
+import {
+  CommesseCalendario,
+  finestraDelMese,
+} from '@/components/commesse/CommesseCalendario';
 import { CommesseTable } from '@/components/commesse/CommesseTable';
 import {
   CommesseToolbar,
