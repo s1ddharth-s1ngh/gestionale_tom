@@ -5,7 +5,7 @@ import type { StatusPillAccent } from '@/components/ui/status-pill';
  * Il lavoro sul campo: dalla pianificazione al rapportino firmato.
  *
  * Due campi qui NON si scrivono a mano — `oreReali` e `avanzamentoPct` derivano
- * dalle lavorazioni (vedi `calcolaOreReali` e `calcolaAvanzamento`). Un numero scrivibile
+ * dalle lavorazioni (vedi `oreRealiDa` e `avanzamentoDa`). Un numero scrivibile
  * a mano diverge dai dati che dovrebbe riassumere il primo giorno.
  */
 
@@ -101,7 +101,10 @@ export interface Commessa {
   note?: string;
   /** Valorizzato dalla chat D quando la commessa viene fatturata. */
   fatturaId?: string;
-/** ISO 8601. Servono all'ordinamento "ultime modificate" e allo storico del cliente. */  creataIl: string;  aggiornataIl: string;
+
+  /** ISO 8601. Servono all'ordinamento "ultime modificate" e allo storico del cliente. */
+  creataIl: string;
+  aggiornataIl: string;
 }
 
 export interface CommessaFiltri {
@@ -128,13 +131,13 @@ export interface CommessaInput {
 
 /** Somma delle ore consuntivate. Le lavorazioni non ancora chiuse valgono zero:
  *  finché non sono spuntate, quelle ore non sono state fatte. */
-export function calcolaOreReali(lavorazioni: Lavorazione[]): number {
+export function oreRealiDa(lavorazioni: Lavorazione[]): number {
   return lavorazioni.reduce((tot, l) => tot + (l.oreReali ?? 0), 0);
 }
 
 /** Percentuale sul numero di lavorazioni, non sulle ore: una commessa con una
  *  lavorazione lunga e nove corte non deve stare al 90% dopo mezz'ora di lavoro. */
-export function calcolaAvanzamento(lavorazioni: Lavorazione[]): number {
+export function avanzamentoDa(lavorazioni: Lavorazione[]): number {
   if (lavorazioni.length === 0) return 0;
   const fatte = lavorazioni.filter((l) => l.completata).length;
   return Math.round((fatte / lavorazioni.length) * 100);
@@ -144,4 +147,22 @@ export function calcolaAvanzamento(lavorazioni: Lavorazione[]): number {
 export function scostamentoOre(commessa: Pick<Commessa, 'orePreviste' | 'oreReali'>): number {
   if (commessa.oreReali === 0) return 0;
   return commessa.oreReali - commessa.orePreviste;
+}
+
+/**
+ * La commessa con il cliente già risolto.
+ *
+ * Elenco e calendario devono mostrare la denominazione del cliente e l'etichetta
+ * del luogo, e la ricerca deve trovarli. Risolverli nel componente vorrebbe dire
+ * una query per riga, e sposterebbe il filtro fuori dal service — dove
+ * CONVENTIONS §4 lo vuole, perché domani diventi un parametro di query invece
+ * che un `.filter()` in pagina.
+ *
+ * I due campi sono stringhe e non l'oggetto `Cliente` intero: alla lista serve
+ * il nome, non l'anagrafica, e portarsi dietro tutto renderebbe la cache di
+ * react-query un secondo posto in cui i clienti invecchiano.
+ */
+export interface CommessaConCliente extends Commessa {
+  clienteDenominazione: string;
+  luogoEtichetta: string;
 }

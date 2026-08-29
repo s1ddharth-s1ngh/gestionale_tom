@@ -1,5 +1,5 @@
 import type { Commessa, Lavorazione } from '@/types/commessa';
-import { avanzamentoDa, oreRealiDa } from '@/types/commessa';
+import { calcolaAvanzamento, calcolaOreReali } from '@/types/commessa';
 
 /**
  * Commesse di esempio. Sostituite da una fetch il giorno che arriva il backend:
@@ -45,12 +45,24 @@ const CLI = {
 
 /** Costruisce la commessa calcolando i derivati: così i mock non possono mentire. */
 function commessa(
-  base: Omit<Commessa, 'oreReali' | 'avanzamentoPct'> & { lavorazioni: Lavorazione[] },
+  base: Omit<Commessa, 'oreReali' | 'avanzamentoPct' | 'creataIl' | 'aggiornataIl'> & {
+    lavorazioni: Lavorazione[];
+    creataIl?: string;
+    aggiornataIl?: string;
+  },
 ): Commessa {
+  // Le due date di sistema si ricavano dal ciclo di vita invece di essere
+  // ripetute in quindici oggetti: creata il giorno prima della pianificazione,
+  // aggiornata all'ultimo evento accaduto davvero.
+  const riferimentoCreazione = base.dataPianificata ?? giorni(-1);
+  const ultimoEvento = base.dataFine ?? base.dataInizio ?? base.dataPianificata ?? riferimentoCreazione;
+
   return {
     ...base,
-    oreReali: oreRealiDa(base.lavorazioni),
-    avanzamentoPct: avanzamentoDa(base.lavorazioni),
+    creataIl: base.creataIl ?? `${riferimentoCreazione}T08:00:00.000Z`,
+    aggiornataIl: base.aggiornataIl ?? `${ultimoEvento}T17:00:00.000Z`,
+    oreReali: calcolaOreReali(base.lavorazioni),
+    avanzamentoPct: calcolaAvanzamento(base.lavorazioni),
   };
 }
 
