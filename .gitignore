@@ -33,3 +33,4 @@ pnpm-debug.log*
 # Cache
 .eslintcache
 *.tsbuildinfo
+supabase/.env

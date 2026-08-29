@@ -11,11 +11,19 @@ oppure via `psql`.
 004_fatture.sql     fatture + vista v_fatture (incassato, residuo, stato derivato)
 005_costi.sql       fornitori, mezzi, costi + vista v_costi
 006_rls.sql         Row Level Security — LEGGERE L'AVVISO IN TESTA AL FILE
+007_fatture_fornitore.sql   fatture passive + viste v_fatture_fornitore e v_marginalita_commessa
+008_costi_riga_fattura.sql  costi.riga_fattura_id + indice unico anti-doppia-generazione
+009_numerazione.sql         assegna_numero_fattura(): progressivo annuale sotto lock
+012_genera_costi_da_fattura.sql  le righe di una fattura fornitore diventano costi, in transazione
 
 010_seed_clienti.sql   dati di esempio: clienti e luoghi di intervento
 011_seed_preventivi.sql dati di esempio: 24 preventivi — richiede 010
-011_seed_commesse.sql  dati di esempio: commesse (richiede 010)
+015_seed_commesse.sql  dati di esempio: 15 commesse — richiede 010
 ```
+
+**`006_rls.sql` va rilanciato dopo il `007`**: quel file aggiunge due tabelle con RLS attiva,
+e finché non ricevono una policy rispondono zero righe a tutti — che a schermo si legge come
+"le fatture fornitore non ci sono" invece che "non hai il permesso".
 
 L'ordine non è decorativo: `002` referenzia `001`, `003` aggiunge una foreign key a `002`,
 `004` ne aggiunge una a `003`. Eseguirli fuori ordine dà errori di chiave mancante.

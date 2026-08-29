@@ -1,0 +1,20 @@
+# Configurazione del progetto Supabase.
+#
+# `verify_jwt = false` su tutte e tre: l'app non ha ancora autenticazione, e con
+# la verifica attiva ogni chiamata tornerebbe 401 perché non c'è nessun token da
+# mandare. Va rimesso a `true` insieme al login — e va rimesso, perché finche' e'
+# false chiunque conosca l'URL della funzione puo' invocarla.
+
+project_id = "gestionale-tom"
+
+[functions.registra-fattura-fornitore]
+verify_jwt = false
+
+[functions.promemoria-scadenze]
+verify_jwt = false
+
+[functions.importa-fattura-xml]
+verify_jwt = false
+
+[functions.numera-fattura]
+verify_jwt = false
