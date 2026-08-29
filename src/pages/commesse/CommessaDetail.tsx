@@ -18,6 +18,7 @@ import {
   useEliminaCommessa,
   usePianificaCommessa,
   useSalvaFoto,
+  useSalvaRapportino,
 } from '@/hooks/useCommesse';
 import { formatData, formatOre } from '@/lib/formatters';
 import type { Lavorazione, StatoCommessa } from '@/types/commessa';
@@ -26,6 +27,7 @@ import { AvanzamentoBar } from '@/components/commesse/AvanzamentoBar';
 import { FotoPrimaDopo } from '@/components/commesse/FotoPrimaDopo';
 import { LavorazioniTable } from '@/components/commesse/LavorazioniTable';
 import { OreConfronto } from '@/components/commesse/OreConfronto';
+import { RapportinoForm } from '@/components/commesse/RapportinoForm';
 import { StatoCommessaBadge } from '@/components/commesse/StatoCommessaBadge';
 
 /**
@@ -72,6 +74,7 @@ export default function CommessaDetail() {
   const pianifica = usePianificaCommessa();
   const salvaLavorazioni = useAggiornaLavorazioni();
   const salvaFoto = useSalvaFoto();
+  const salvaRapportino = useSalvaRapportino();
   const elimina = useEliminaCommessa();
 
   const [confermaElimina, setConfermaElimina] = React.useState(false);
@@ -204,14 +207,40 @@ export default function CommessaDetail() {
                 />
               </SectionCard>
 
-              <SectionCard title="Rapportino">
-                <TableEmptyState
-                  compact
-                  icon={ClipboardText}
-                  title="Il rapportino arriva col prossimo commit"
-                  description="Ore lavorate, operatori, materiali e firma del cliente."
-                />
-              </SectionCard>
+              {/* Il rapportino compare solo quando c'e' qualcosa da
+                  rapportare: su una commessa non ancora avviata un modulo di
+                  fine lavoro vuoto invita a compilarlo prima del lavoro. */}
+              {commessa.stato === 'da_pianificare' || commessa.stato === 'pianificata' ? (
+                <SectionCard title="Rapportino">
+                  <TableEmptyState
+                    compact
+                    icon={ClipboardText}
+                    title="Il rapportino si compila a lavoro iniziato"
+                    description="Avvia la commessa e qui trovi ore, operatori, materiali e la firma del cliente."
+                  />
+                </SectionCard>
+              ) : (
+                <SectionCard title="Rapportino">
+                  <RapportinoForm
+                    commessa={commessa}
+                    readOnly={commessa.stato === 'annullata'}
+                    salvataggioInCorso={salvaRapportino.isPending}
+                    onSalva={async (rapportino) => {
+                      if (!id) return;
+                      try {
+                        await salvaRapportino.mutateAsync({ id, rapportino });
+                        toast.success(
+                          rapportino.firmaCliente
+                            ? 'Rapportino firmato, commessa completata'
+                            : 'Rapportino salvato',
+                        );
+                      } catch {
+                        toast.error('Non e’ stato possibile salvare il rapportino');
+                      }
+                    }}
+                  />
+                </SectionCard>
+              )}
             </div>
 
             <div className="space-y-5 lg:col-span-4">

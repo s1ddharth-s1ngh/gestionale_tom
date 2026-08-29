@@ -1,153 +1,141 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Signature, Trash2 } from '@/components/ui/icons';
+import React from 'react';
 import { Button } from '@/components/ui/button';
-import { formatData } from '@/lib/formatters';
+import { Signature } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 
 interface FirmaClienteProps {
-  /** dataUrl già acquisito: se c'è, si mostra la firma invece della lavagna. */
-  value?: string;
-  firmatoIl?: string;
-  /** `undefined` quando si cancella: il rapportino torna non firmato. */
+  /** dataUrl della firma già raccolta, se c'è. */
+  valore?: string;
   onChange: (dataUrl: string | undefined) => void;
   disabled?: boolean;
   className?: string;
 }
 
-/** Il canvas è disegnato a densità doppia e riscalato via CSS: a densità 1
- *  il tratto su schermo retina esce sgranato. */
+/** Il canvas è a densità doppia: a densità 1 la firma esce sgranata sui portatili. */
 const SCALA = 2;
 const ALTEZZA = 160;
 
 /**
- * Firma del cliente su canvas, salvata come dataUrl dentro il rapportino.
+ * La firma del cliente, raccolta col dito o col mouse sul posto.
  *
- * Scritta a mano invece di `react-signature-canvas`: sono i listener di
- * pointer e un `toDataURL`, e una dipendenza in più andrebbe poi vestita
- * per farla stare nel tema scuro.
+ * Un `<canvas>` con i listener di pointer invece di una libreria: sono sessanta
+ * righe, e una dipendenza in più per sessanta righe è una dipendenza che poi va
+ * aggiornata per sempre. I pointer event coprono dito, penna e mouse con lo
+ * stesso codice — è l'unico modo per cui questo funziona sia sul tablet in
+ * cantiere sia sul portatile in ufficio.
+ *
+ * Il risultato è un dataUrl PNG, che è già la forma in cui `Foto` conserva le
+ * immagini: il giorno che c'è uno storage vero cambia dove finisce, non cosa è.
  */
-export function FirmaCliente({ value, firmatoIl, onChange, disabled, className }: FirmaClienteProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const disegnando = useRef(false);
-  const [vuoto, setVuoto] = useState(true);
+export function FirmaCliente({ valore, onChange, disabled, className }: FirmaClienteProps) {
+  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const disegnando = React.useRef(false);
+  const [vuoto, setVuoto] = React.useState(!valore);
 
-  // Il canvas si dimensiona sul contenitore, che dipende dal layout: va fatto
-  // dopo il mount, e rifatto al resize della finestra.
-  const dimensiona = useCallback(() => {
+  /** Prepara il canvas e ridisegna la firma già salvata. */
+  React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const larghezza = canvas.parentElement?.clientWidth ?? 480;
+
+    const larghezza = canvas.clientWidth;
     canvas.width = larghezza * SCALA;
     canvas.height = ALTEZZA * SCALA;
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.scale(SCALA, SCALA);
-    ctx.lineWidth = 1.8;
+    ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-  }, []);
+    // Bianco su fondo trasparente: la firma vive dentro una scheda scura, e un
+    // tratto nero sarebbe invisibile finché qualcuno non la stampa.
+    ctx.strokeStyle = '#ffffff';
 
-  useEffect(() => {
-    if (value) return; // con una firma già acquisita la lavagna non è montata
-    dimensiona();
-    window.addEventListener('resize', dimensiona);
-    return () => window.removeEventListener('resize', dimensiona);
-  }, [dimensiona, value]);
+    if (valore) {
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0, larghezza, ALTEZZA);
+      img.src = valore;
+      setVuoto(false);
+    }
+    // Solo al montaggio e al cambio della firma salvata: ridimensionare il
+    // canvas lo azzera, e rifarlo a ogni render cancellerebbe il tratto in corso.
+  }, [valore]);
 
-  function puntoDa(e: React.PointerEvent<HTMLCanvasElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  }
+  const posizione = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
 
-  function giu(e: React.PointerEvent<HTMLCanvasElement>) {
+  const inizia = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (disabled) return;
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx) return;
-    // Il pointer capture serve a non perdere il tratto quando il dito esce
-    // dal canvas e rientra: senza, la firma si spezza sul bordo.
+    // La cattura tiene il tratto anche quando il dito esce dal riquadro: senza,
+    // una firma che sborda si spezza a metà e va rifatta.
     e.currentTarget.setPointerCapture(e.pointerId);
     disegnando.current = true;
-    const { x, y } = puntoDa(e);
+    const { x, y } = posizione(e);
     ctx.beginPath();
     ctx.moveTo(x, y);
-  }
+  };
 
-  function muovi(e: React.PointerEvent<HTMLCanvasElement>) {
+  const muovi = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!disegnando.current) return;
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx) return;
-    const { x, y } = puntoDa(e);
+    const { x, y } = posizione(e);
     ctx.lineTo(x, y);
     ctx.stroke();
     if (vuoto) setVuoto(false);
-  }
+  };
 
-  function su() {
+  const finisci = () => {
+    if (!disegnando.current) return;
     disegnando.current = false;
-  }
+    // Si risale al genitore alla fine del tratto e non a ogni pixel: un dataUrl
+    // per movimento del dito significa migliaia di stringhe base64 al secondo.
+    const dataUrl = canvasRef.current?.toDataURL('image/png');
+    if (dataUrl) onChange(dataUrl);
+  };
 
-  function conferma() {
-    const canvas = canvasRef.current;
-    if (!canvas || vuoto) return;
-    onChange(canvas.toDataURL('image/png'));
-  }
-
-  function pulisci() {
+  const pulisci = () => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
-    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     setVuoto(true);
-  }
-
-  if (value) {
-    return (
-      <div className={cn('space-y-2', className)}>
-        <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-3">
-          <img src={value} alt="Firma del cliente" className="h-[120px] w-full object-contain" />
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[11px] text-white/40">
-            Firmato il {formatData(firmatoIl)}
-          </span>
-          {!disabled && (
-            <Button variant="ghost" size="sm" onClick={() => onChange(undefined)}>
-              <Trash2 className="h-3.5 w-3.5" />
-              Rifai la firma
-            </Button>
-          )}
-        </div>
-      </div>
-    );
-  }
+    onChange(undefined);
+  };
 
   return (
     <div className={cn('space-y-2', className)}>
-      <div className="relative rounded-xl border border-white/[0.07] bg-white/[0.03]">
+      <div className="relative overflow-hidden rounded-xl border border-white/[0.08] bg-[#0d0d0d]">
         <canvas
           ref={canvasRef}
           style={{ height: ALTEZZA }}
-          className="w-full touch-none"
-          onPointerDown={giu}
+          className={cn('w-full touch-none', disabled ? 'cursor-not-allowed' : 'cursor-crosshair')}
+          onPointerDown={inizia}
           onPointerMove={muovi}
-          onPointerUp={su}
-          onPointerCancel={su}
+          onPointerUp={finisci}
+          onPointerCancel={finisci}
         />
         {vuoto && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2">
-            <Signature className="h-5 w-5 text-white/25" />
-            <p className="text-[12px] text-white/30">Firma qui con il dito o il mouse</p>
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-white/25">
+            <Signature className="h-6 w-6" />
+            <span className="text-[11px]">
+              {disabled ? 'Nessuna firma raccolta' : 'Firma qui col dito o col mouse'}
+            </span>
           </div>
         )}
       </div>
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="secondary" size="sm" onClick={pulisci} disabled={vuoto || disabled}>
-          Cancella
-        </Button>
-        <Button variant="primary" size="sm" onClick={conferma} disabled={vuoto || disabled}>
-          Conferma firma
-        </Button>
-      </div>
+
+      {!disabled && (
+        <div className="flex justify-end">
+          <Button type="button" variant="ghost" onClick={pulisci} disabled={vuoto}>
+            Cancella e rifai
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
