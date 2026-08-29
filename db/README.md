@@ -11,6 +11,9 @@ oppure via `psql`.
 004_fatture.sql     fatture + vista v_fatture (incassato, residuo, stato derivato)
 005_costi.sql       fornitori, mezzi, costi + vista v_costi
 006_rls.sql         Row Level Security — LEGGERE L'AVVISO IN TESTA AL FILE
+
+010_seed_clienti.sql   dati di esempio: clienti e luoghi di intervento
+011_seed_commesse.sql  dati di esempio: commesse (richiede 010)
 ```
 
 L'ordine non è decorativo: `002` referenzia `001`, `003` aggiunge una foreign key a `002`,
