@@ -3,6 +3,7 @@ import type { FiltriBase, Foto, Paginato } from '@/types/comune';
 import { impagina, ritardo } from '@/types/comune';
 import type {
   Commessa,
+  CommessaConCliente,
   CommessaFiltri,
   CommessaInput,
   Lavorazione,
@@ -72,6 +73,44 @@ function perDataPianificata(a: Commessa, b: Commessa): number {
   return b.dataPianificata.localeCompare(a.dataPianificata);
 }
 
+/**
+ * PROVVISORIO — TODO(chat A): sparisce quando esiste `clientiService`, e le due
+ * righe di `conCliente` diventano una sua lettura.
+ *
+ * Sta qui e non nei mock delle commesse perché è anagrafica di qualcun altro:
+ * il giorno che l'originale esiste si cancella questa mappa e non si tocca
+ * nient'altro. L'alternativa — mostrare `cli-03` in tabella finché la chat A non
+ * arriva — renderebbe elenco e calendario impossibili da giudicare a schermo,
+ * che è l'unico modo che abbiamo di sapere se funzionano.
+ */
+const ANAGRAFICA_PROVVISORIA: Record<string, { cliente: string; luoghi: Record<string, string> }> = {
+  'cli-01': { cliente: 'Condominio Via Battisti 14', luoghi: { 'lgo-01-1': 'Cortile interno' } },
+  'cli-02': {
+    cliente: 'Comune di Casalecchio di Reno',
+    luoghi: { 'lgo-02-1': 'Viale Carducci', 'lgo-02-2': 'Parco della Chiusa' },
+  },
+  'cli-03': { cliente: 'Az. Agricola Ferrari Luca', luoghi: { 'lgo-03-1': 'Podere Le Fontane' } },
+  'cli-04': { cliente: 'Villa Monteveglio', luoghi: { 'lgo-04-1': 'Parco della villa' } },
+  'cli-05': { cliente: 'Condominio Le Querce', luoghi: { 'lgo-05-1': 'Area verde condominiale' } },
+  'cli-06': { cliente: 'Hotel San Luca', luoghi: { 'lgo-06-1': 'Giardino e siepe perimetrale' } },
+  'cli-07': { cliente: "Parrocchia di Sant'Agata", luoghi: { 'lgo-07-1': 'Viale dei cipressi' } },
+  'cli-08': { cliente: 'Gandolfi Marco', luoghi: { 'lgo-08-1': 'Giardino privato' } },
+  'cli-09': {
+    cliente: 'Logistica Emiliana Trasporti e Magazzinaggio S.r.l.',
+    luoghi: { 'lgo-09-1': 'Piazzale e area di manovra' },
+  },
+};
+
+/** Aggiunge alla commessa i due campi che elenco e calendario devono mostrare. */
+function conCliente(c: Commessa): CommessaConCliente {
+  const voce = ANAGRAFICA_PROVVISORIA[c.clienteId];
+  return {
+    ...c,
+    clienteDenominazione: voce?.cliente ?? c.clienteId,
+    luogoEtichetta: voce?.luoghi[c.luogoInterventoId] ?? c.luogoInterventoId,
+  };
+}
+
 function trova(id: string): Commessa {
   const c = commesse.find((x) => x.id === id);
   if (!c) throw new Error(`Commessa ${id} non trovata`);
@@ -86,10 +125,12 @@ function scrivi(id: string, patch: Partial<Commessa>): Commessa {
 }
 
 export const commesseService = {
-  async list(filtri?: CommessaFiltri): Promise<Paginato<Commessa>> {
+  async list(filtri?: CommessaFiltri): Promise<Paginato<CommessaConCliente>> {
     await ritardo();
 
-    let righe = commesse;
+    // Il join col cliente sta PRIMA del filtro, o la ricerca per nome non
+    // troverebbe niente: `q` deve poter cercare su un campo che ancora non c'è.
+    let righe = commesse.map(conCliente);
 
     if (filtri?.stato) righe = righe.filter((c) => c.stato === filtri.stato);
     if (filtri?.clienteId) righe = righe.filter((c) => c.clienteId === filtri.clienteId);
@@ -101,12 +142,11 @@ export const commesseService = {
 
     if (filtri?.q) {
       const q = filtri.q.trim().toLowerCase();
-      // TODO(chat A): quando esiste `clientiService`, la ricerca copre anche la
-      // denominazione del cliente e l'etichetta del luogo. Il join va fatto qui e
-      // non nella pagina: con un backend vero diventa una condizione della query.
       righe = righe.filter(
         (c) =>
           c.numero.toLowerCase().includes(q) ||
+          c.clienteDenominazione.toLowerCase().includes(q) ||
+          c.luogoEtichetta.toLowerCase().includes(q) ||
           (c.note?.toLowerCase().includes(q) ?? false) ||
           c.lavorazioni.some((l) => l.descrizione.toLowerCase().includes(q)),
       );
@@ -115,15 +155,19 @@ export const commesseService = {
     return impagina([...righe].sort(perDataPianificata), filtri as FiltriBase);
   },
 
-  async getById(id: string): Promise<Commessa | null> {
+  async getById(id: string): Promise<CommessaConCliente | null> {
     await ritardo(200);
-    return commesse.find((c) => c.id === id) ?? null;
+    const c = commesse.find((x) => x.id === id);
+    return c ? conCliente(c) : null;
   },
 
   /** Le commesse di un cliente, per lo storico interventi nella sua scheda. */
-  async listPerCliente(clienteId: string): Promise<Commessa[]> {
+  async listPerCliente(clienteId: string): Promise<CommessaConCliente[]> {
     await ritardo(200);
-    return commesse.filter((c) => c.clienteId === clienteId).sort(perDataPianificata);
+    return commesse
+      .filter((c) => c.clienteId === clienteId)
+      .sort(perDataPianificata)
+      .map(conCliente);
   },
 
   async create(input: CommessaInput): Promise<Commessa> {
